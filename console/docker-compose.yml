@@ -1,0 +1,29 @@
+version: "3.3"
+
+# 部署前：① cp .env.example .env 并填好  ② 生成远程提权用 keypair：
+#   mkdir -p data secrets/ssh && ssh-keygen -t ed25519 -N '' -f secrets/ssh/id_ed25519
+# 之后：docker-compose up -d   （首次会构建镜像）
+
+services:
+  sub2api-console:
+    build:
+      context: ./app
+    image: sub2api-console:local
+    container_name: sub2api-console
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    ports:
+      - "${CONSOLE_PORT:-21013}:21013"
+    volumes:
+      - ./data:/data                 # 工具侧 SQLite(派生元数据/会话/密码哈希/master_key)
+      - ./secrets/ssh:/root/.ssh:ro  # 远程站点 ssh 提权用 key(只读挂载，绝不入库/镜像)
+    networks:
+      - sub2api_sub2api-net
+
+# 外部网络：须与 sub2api 的 postgres 同网。官方 compose 默认 sub2api_sub2api-net；
+# 若你的网络名不同，把下面这行与上面 service 的 networks 改成你的网络名
+# (查法 docker network ls | grep sub2api)。老版 docker-compose 不支持 networks.name 变量化。
+networks:
+  sub2api_sub2api-net:
+    external: true

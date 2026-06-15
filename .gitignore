@@ -1,0 +1,27 @@
+# deps / build
+node_modules/
+dist/
+dist-ssr/
+server-dist/
+*.local
+
+# secrets & runtime data (NEVER commit)
+.env
+**/.env
+!**/.env.example
+**/secrets/
+**/data/
+*.db
+*.db-*
+
+# private ops notes (not part of the OSS product)
+00TEM/
+
+# logs / os / editor
+*.log
+npm-debug.log*
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.sw?
