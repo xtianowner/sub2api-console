@@ -233,6 +233,15 @@ tr:last-child td { border-bottom: 0; }
 .danger-pill-solid { border: 1px solid var(--danger); background: var(--danger); color: #fff; border-radius: 9px; padding: 7px 11px; font-weight: 800; font-size: 13px; display: inline-flex; align-items: center; gap: 5px; }
 .danger-pill-solid:hover { background: #be123c; border-color: #be123c; }
 .danger-pill-solid svg { width: 14px; height: 14px; }
+/* 防按钮内文字换行导致图标/文字重叠；图标不挤压 */
+.bulk-bar .mini-btn, .bulk-bar .danger-pill, .bulk-bar .danger-pill-solid, .bulk-bar .seg-btn, .cond-pill, .danger-zone .dz-label { white-space: nowrap; }
+.bulk-bar svg, .danger-zone svg, .mini-btn svg, .danger-pill-solid svg { flex: 0 0 auto; }
+/* mini-btn(如绿色盘点选中) 内 SVG 必须显式定尺寸，否则无 viewBox 尺寸时撑成大方块 */
+.mini-btn svg, .cond-pill svg { width: 15px; height: 15px; }
+.bulk-bar { row-gap: 10px; }
+/* 批量栏分两区(编辑 / 危险)各自整体不被拆断 */
+.bulk-edit-zone { display: inline-flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+.danger-zone { flex-wrap: nowrap; }
 
 /* 分组/批次卡片网格 */
 .grp-grid, .site-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }

@@ -110,52 +110,107 @@ export async function doImport(body: any): Promise<any> {
   return r || { error: '无可导入的号' }
 }
 
-/** 中转接入：一个上游 base_url + 多档(key)，逐档建 upstream 账号 + 建/绑分组。 */
+const msg = (e: unknown) => String(e instanceof Error ? e.message : e).slice(0, 200)
+function originOf(url: string): string { try { const u = new URL(url); return `${u.protocol}//${u.host}` } catch { return url } }
+
+/**
+ * 中转接入（按 sub2api 真实工作流，支持批量多档）：
+ *  ① 建中转账号 type=apikey（credentials={base_url, api_key, model_mapping?}；base_url 仅对 apikey 生效）
+ *  ② 建/复用分组并把各档账号绑进去（group_ids）
+ *  ③ 可选：经 sub2api 用户登录(JWT) 建「使用用」API Key 绑分组（admin-api-key 无此接口；明文仅返回一次，不落库）
+ *  ④ 可选：建渠道监控（监控上游：endpoint=base_url 的 origin，api_key=上游 key）
+ */
 export async function upstreamImport(body: any): Promise<any> {
   const siteId = Number(body.site_id || 1)
-  const baseUrl = (body.base_url || '').trim()
   const platform = body.platform || 'openai'
-  const atype = body.type || 'upstream'
-  const tiers = body.tiers || []
-  if (!baseUrl || !tiers.length) return { error: '缺少 base_url 或档位' }
+  const baseUrl = (body.base_url || '').trim()
+  if (!baseUrl) return { error: '缺少 base_url' }
+  // 归一化档位：批量 tiers[]，或单档(name+api_key)
+  const raw = (Array.isArray(body.tiers) && body.tiers.length) ? body.tiers
+    : [{ name: body.name, api_key: body.api_key, priority: body.priority, concurrency: body.concurrency, rate_multiplier: body.rate_multiplier }]
+  const tiers = raw.map((t: any) => ({
+    name: (t.name || '').trim(), api_key: (t.api_key || '').trim(),
+    priority: Number(t.priority ?? body.priority ?? 50), concurrency: Number(t.concurrency ?? body.concurrency ?? 10),
+    rate: Number(t.rate_multiplier ?? body.rate_multiplier ?? 1),
+  })).filter((t: any) => t.name && t.api_key)
+  if (!tiers.length) return { error: '至少一档需填 账号名 + api_key' }
   const c = getClient(siteId)
-  let name2gid: Record<string, number> = {}
+
+  // model_mapping 共享：对象，或 "src:dst"/"src=dst" 每行
+  let modelMapping: Record<string, string> | undefined
+  if (body.model_mapping && typeof body.model_mapping === 'object') modelMapping = body.model_mapping
+  else if (typeof body.model_mapping === 'string' && body.model_mapping.trim()) {
+    const m: Record<string, string> = {}
+    for (const line of body.model_mapping.split('\n')) { const [s, d2] = line.split(/[:=]/).map((x: string) => (x || '').trim()); if (s && d2) m[s] = d2 }
+    if (Object.keys(m).length) modelMapping = m
+  }
+
+  // ① 分组（复用同名或新建；默认用首档名）
+  let gid: number | null = body.group_id ? Number(body.group_id) : null
+  const gname = (body.group || '').trim() || tiers[0].name
   try {
-    const gl = await c.listGroups(1, 300)
-    const glist = Array.isArray(gl) ? gl : (gl?.items || [])
-    for (const g of glist) if (g.name) name2gid[(g.name as string).trim()] = g.id
-  } catch { name2gid = {} }
-  const results: any[] = []
-  const d = db()
-  for (const ti of tiers) {
-    const tname = (ti.tier || '').trim()
-    const key = (ti.api_key || '').trim()
-    if (!key) { results.push({ tier: tname, ok: false, error: '缺 api_key' }); continue }
-    const rate = Number(ti.rate_multiplier || 1.0)
-    const prio = Number(ti.priority ?? 50)
-    const conc = Number(ti.concurrency ?? 5)
-    let gid = ti.group_id
-    const gname = (ti.group || '').trim()
+    if (!gid) {
+      const gl = await c.listGroups(1, 300)
+      const glist = Array.isArray(gl) ? gl : (gl?.items || [])
+      const ex = glist.find((g: any) => (g.name || '').trim() === gname)
+      if (ex) gid = ex.id
+      else { const grp: any = await c.createGroup(gname, { platform, rate_multiplier: tiers[0].rate }); gid = (grp && typeof grp === 'object') ? grp.id : grp }
+    }
+  } catch (e) { return { error: `建/取分组失败: ${msg(e)}` } }
+
+  // ② 各档建 apikey 账号并绑分组
+  const accounts: any[] = []
+  for (const t of tiers) {
     try {
-      if (!gid && gname) {
-        gid = name2gid[gname]
-        if (!gid) { const grp: any = await c.createGroup(gname, { platform, rate_multiplier: rate }); gid = (grp && typeof grp === 'object') ? grp.id : grp; name2gid[gname] = gid }
-      }
-      const aname = (ti.account_name || '').trim() || (tname || 'upstream')
+      const cred: Record<string, unknown> = { base_url: baseUrl, api_key: t.api_key }
+      if (modelMapping) cred.model_mapping = modelMapping
       const acc: any = await c.createAccount({
-        name: aname, platform, type: atype, credentials: { base_url: baseUrl, api_key: key },
-        ...(gid ? { group_ids: [gid] } : {}), priority: prio, concurrency: conc, rate_multiplier: rate,
+        name: t.name, platform, type: 'apikey', credentials: cred,
+        ...(gid ? { group_ids: [gid] } : {}), priority: t.priority, concurrency: t.concurrency, rate_multiplier: t.rate,
+        confirm_mixed_channel_risk: true,
       })
-      const aid = (acc && typeof acc === 'object') ? acc.id : acc
-      results.push({ tier: tname, ok: true, account_id: aid, group_id: gid, name: aname })
-      if (gid) {
-        const b = d.prepare('SELECT id FROM batches WHERE site_id=? AND sub2_group_id=?').get(siteId, gid)
-        if (!b) d.prepare(`INSERT INTO batches(site_id,name,sub2_group_id,source_path,imported_at,default_priority,default_concurrency,total_count)
-                           VALUES(?,?,?,?,?,?,?,?)`).run(siteId, gname || aname, gid, 'upstream:' + baseUrl, nowCst(), prio, conc, 0)
-      }
-    } catch (e) {
-      results.push({ tier: tname, ok: false, error: String(e instanceof Error ? e.message : e).slice(0, 120) })
+      accounts.push({ name: t.name, account_id: (acc && typeof acc === 'object') ? acc.id : acc })
+    } catch (e) { accounts.push({ name: t.name, error: msg(e) }) }
+  }
+  const created = accounts.filter((a) => a.account_id).length
+
+  // 本地批次元数据
+  if (gid && created) {
+    const d = db()
+    const b = d.prepare('SELECT id FROM batches WHERE site_id=? AND sub2_group_id=?').get(siteId, gid)
+    if (!b) d.prepare(`INSERT INTO batches(site_id,name,sub2_group_id,source_path,imported_at,default_priority,default_concurrency,total_count)
+                       VALUES(?,?,?,?,?,?,?,?)`).run(siteId, gname, gid, 'relay:' + baseUrl, nowCst(), tiers[0].priority, tiers[0].concurrency, created)
+  }
+
+  // ③ 可选：经用户登录建使用 key（明文仅一次返回，不落库）
+  let key: { id: number; key: string } | undefined
+  let keyError: string | undefined
+  if (body.create_key && body.create_key.enabled) {
+    const email = (body.create_key.email || '').trim()
+    const password = body.create_key.password || ''
+    if (!email || !password) keyError = '建 key 需 sub2api 用户邮箱+密码'
+    else if (!gid) keyError = '无分组，跳过建 key'
+    else { try { key = await c.createUsageKey(email, password, { name: `${gname}-key`, group_id: gid }) } catch (e) { keyError = msg(e) } }
+  }
+
+  // ④ 可选渠道监控（监控上游：endpoint=origin，api_key=首档上游 key）
+  let monitorId: number | undefined
+  let monitorError: string | undefined
+  if (body.monitor && body.monitor.enabled) {
+    const endpoint = originOf(baseUrl)
+    if (!endpoint.startsWith('https://')) monitorError = `渠道监控要求 https 的纯 origin，base_url(${endpoint}) 非 https，已跳过`
+    else {
+      const m = body.monitor
+      try {
+        const mon: any = await c.createChannelMonitor({
+          name: `${gname}-monitor`, provider: m.provider || platform, endpoint, api_key: tiers[0].api_key,
+          primary_model: (m.primary_model || '').trim(), interval_seconds: Math.min(3600, Math.max(15, Number(m.interval_seconds || 60))),
+          enabled: true, api_mode: m.api_mode || 'chat_completions', extra_models: [], group_name: gname,
+        })
+        monitorId = (mon && typeof mon === 'object') ? mon.id : mon
+      } catch (e) { monitorError = `建渠道监控失败: ${msg(e)}` }
     }
   }
-  return { created: results.filter((r) => r.ok).length, total: tiers.length, results }
+
+  return { ok: created > 0, group_id: gid, group_name: gname, accounts, created, total: tiers.length, key, key_error: keyError, monitor_id: monitorId, monitor_error: monitorError }
 }

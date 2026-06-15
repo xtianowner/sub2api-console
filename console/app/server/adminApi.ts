@@ -156,6 +156,27 @@ export class AdminApi {
     return { ok: false, error: error || (httpStatus >= 400 ? `HTTP ${httpStatus}` : '测试未完成(无 test_complete)') }
   }
 
+  // ---- 渠道监控 ----
+  createChannelMonitor(body: Record<string, unknown>) { return this.req('POST', '/admin/channel-monitors', body) }
+
+  /**
+   * 「使用用」API Key：sub2api 仅用户态 POST /keys 能创建(需登录 JWT，admin-api-key 不行)。
+   * 用传入的 sub2api 用户邮箱+密码登录拿 JWT，再建 key 绑分组；返回 {id, key(明文，仅此一次)}。
+   */
+  async createUsageKey(email: string, password: string, body: { name: string; group_id: number }): Promise<{ id: number; key: string }> {
+    const lr = await fetch(this.base + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) })
+    const lj: any = await lr.json().catch(() => ({}))
+    if (lr.status >= 400) throw new ApiError(`登录失败(${lr.status}): ${JSON.stringify(lj).slice(0, 120)}`)
+    const jwt = (lj.data || lj || {}).access_token
+    if (!jwt) throw new ApiError('登录响应缺 access_token')
+    const kr = await fetch(this.base + '/keys', { method: 'POST', headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const kj: any = await kr.json().catch(() => ({}))
+    if (kr.status >= 400) throw new ApiError(`建 key 失败(${kr.status}): ${JSON.stringify(kj).slice(0, 120)}`)
+    const d = kj.data || kj
+    if (!d.key) throw new ApiError('建 key 响应缺明文 key')
+    return { id: d.id, key: d.key }
+  }
+
   // ---- 代理 ----
   listProxies() { return this.req<{ items?: unknown[] }>('GET', '/admin/proxies?page=1&page_size=100') }
 

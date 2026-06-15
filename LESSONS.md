@@ -33,6 +33,13 @@
 **真机验证(远程站)**：apikey 159 Qz-Pro→alive、160 Qz-Plus→error、147 上游→error("Upstream request failed")，与直连 sub2api 测试端点一致。
 **注意**：apikey 盘点 = 对上游发真实测试请求(消耗中转配额)，按需触发。
 
+## 8. 中转接入必须按 sub2api 真实工作流：账号(type=apikey) + 分组 + (可选)渠道监控
+**问题（用户发现）**：旧 `upstreamImport` 用 `type=upstream` 建账号 → 看似建了空壳分组、中转不工作。
+**根因（源码确认）**：`Account.GetBaseURL()` 里 `if a.Type != AccountTypeAPIKey { return "" }` —— **base_url 只对 `type=apikey` 生效**；type=upstream 时 base_url 被忽略 → 请求不路由到上游 = 非功能账号。真实中转账号(Qz-Pro/上游)都是 `type=apikey`、credentials={base_url, api_key, model_mapping}。
+**sub2api 真实工作流**：① 建账号 `POST /admin/accounts`(type=apikey, credentials 三键, group_ids 绑分组, 混渠道冲突加 `confirm_mixed_channel_risk:true` 跳 409) → ② 建/绑分组 `POST /admin/groups`(必传 rate_multiplier) → ③ 建使用用 API Key `POST /api/v1/keys`(**用户态 jwtAuth，admin x-api-key 不可调**，明文 key 仅创建时返回一次) → ④ 渠道监控 `POST /admin/channel-monitors`(endpoint=上游 origin 纯 https、api_key=上游 key、group_name 仅展示无外键)。
+**已采用**：`upstreamImport` 重做为 ①+②+④(可选)；③ 因需用户 JWT → 留给用户在 sub2api 自助(UI 明示)。监控 endpoint 取 base_url 的 origin，非 https 则跳过并提示。
+**真机验证(43)**：账号 type=apikey、credentials=[base_url,model_mapping]、绑入分组、监控建成(endpoint=https://api.openai.com)；清理 `DELETE /admin/channel-monitors/:id` + 删分组级联。
+
 ## 6. sub2api 取 admin-api-key 需先做合规确认(ADMIN_COMPLIANCE_ACK_REQUIRED)
 **现象**：regenerate admin-api-key 返回 `ADMIN_COMPLIANCE_ACK_REQUIRED`(version)。
 **解**：先 `POST /api/v1/admin/compliance/accept` 带 `{phrase: <ack_phrase_en/zh>, version}`(短语来自 `GET /admin/compliance` 的 ack_phrase；**EN 短语纯 ASCII 经 ssh/heredoc 不走样，zh 易被 UTF-8 转义破坏**)，再 regenerate。本机 sub2api 的 admin 密码经 PG 直改 bcrypt(`$2b$` Go 兼容)重置后可登录。

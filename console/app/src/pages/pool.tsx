@@ -151,11 +151,13 @@ export function AccountsPage({ siteInfo, lang }: { siteInfo: SiteInfo; lang: Lan
       <div className="bar-div" />
       <button className="mini-btn green" onClick={doProbe} disabled={running}>{ICON.bolt}{t.probeSelected}</button>
       <div className="bar-div" />
-      <div className="seg-wrap">{(['priority', 'concurrency', 'proxy', 'group'] as const).map((f) => <button key={f} className={cls('seg-btn', editField === f && 'active')} onClick={() => setEditField(f)}>{f === 'priority' ? t.opPriority : f === 'concurrency' ? t.opConcurrency : f === 'proxy' ? t.opProxy : t.opGroup}</button>)}</div>
-      {editField === 'proxy' ? <select className="bulk-val" value={bulkVal} onChange={(e) => setBulkVal(e.target.value)}><option value="">{t.noProxy}</option>{proxies.map((p) => <option key={p.id} value={p.id}>{p.name || `#${p.id}`}</option>)}</select>
-        : editField === 'group' ? <select className="bulk-val" value={bulkVal} onChange={(e) => setBulkVal(e.target.value)}><option value="">{t.selectGroup}</option>{groups.map((g) => <option key={g.id} value={g.id}>{g.name || `#${g.id}`}</option>)}</select>
-        : <input className="bulk-val" type="number" value={bulkVal} onChange={(e) => setBulkVal(e.target.value)} placeholder={editField === 'priority' ? t.opPriority : t.opConcurrency} />}
-      <button className="btn btn-primary btn-sm" onClick={doBulkEdit}>{t.apply}</button>
+      <div className="bulk-edit-zone">
+        <div className="seg-wrap">{(['priority', 'concurrency', 'proxy', 'group'] as const).map((f) => <button key={f} className={cls('seg-btn', editField === f && 'active')} onClick={() => setEditField(f)}>{f === 'priority' ? t.opPriority : f === 'concurrency' ? t.opConcurrency : f === 'proxy' ? t.opProxy : t.opGroup}</button>)}</div>
+        {editField === 'proxy' ? <select className="bulk-val" value={bulkVal} onChange={(e) => setBulkVal(e.target.value)}><option value="">{t.noProxy}</option>{proxies.map((p) => <option key={p.id} value={p.id}>{p.name || `#${p.id}`}</option>)}</select>
+          : editField === 'group' ? <select className="bulk-val" value={bulkVal} onChange={(e) => setBulkVal(e.target.value)}><option value="">{t.selectGroup}</option>{groups.map((g) => <option key={g.id} value={g.id}>{g.name || `#${g.id}`}</option>)}</select>
+          : <input className="bulk-val" type="number" value={bulkVal} onChange={(e) => setBulkVal(e.target.value)} placeholder={editField === 'priority' ? t.opPriority : t.opConcurrency} />}
+        <button className="btn btn-primary btn-sm" onClick={doBulkEdit}>{t.apply}</button>
+      </div>
       <div className="bulk-spacer" />
       <div className="danger-zone">
         <span className="dz-label">{ICON.warn}{t.dangerLabel}</span>
@@ -214,16 +216,83 @@ function ImportModal({ site, lang, groups, onClose, onDone }: { site: number; la
 
 function UpstreamModal({ site, lang, onClose, onDone }: { site: number; lang: Lang; onClose: () => void; onDone: () => void }) {
   const t = copy[lang]; const toast = useToast()
-  const [baseUrl, setBaseUrl] = useState(''); const [tiers, setTiers] = useState(''); const [busy, setBusy] = useState(false)
+  const [f, setF] = useState<any>({ platform: 'openai', base_url: '', group: '', model_mapping: '', priority: '50', concurrency: '10', rate_multiplier: '1' })
+  const [tiers, setTiers] = useState<any[]>([{ name: '', api_key: '' }])
+  const [key, setKey] = useState<any>({ enabled: false, email: '', password: '' })
+  const [mon, setMon] = useState<any>({ enabled: false, primary_model: '', interval_seconds: '60' })
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<any>(null)
+  const set = (k: string, v: any) => setF((o: any) => ({ ...o, [k]: v }))
+  const setTier = (i: number, k: string, v: any) => setTiers((ts) => ts.map((x, j) => (j === i ? { ...x, [k]: v } : x)))
   const submit = async () => {
-    const parsed = tiers.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const [group, api_key, rate] = l.split(',').map((x) => x.trim()); return { group, api_key, rate_multiplier: Number(rate || 1) } }).filter((x) => x.api_key)
-    if (!baseUrl || !parsed.length) { toast('缺 base_url 或档位', 'err'); return }
+    const valid = tiers.filter((x) => x.name.trim() && x.api_key.trim())
+    if (!f.base_url.trim() || !valid.length) { toast(t.upRelayNeed, 'err'); return }
     setBusy(true)
-    try { const r = await api.doUpstreamImport({ site_id: site, base_url: baseUrl, tiers: parsed }); toast(`中转: created ${r.created}/${r.total}`); onDone() } catch (e: any) { toast(String(e.message || e), 'err') } finally { setBusy(false) }
+    try {
+      const body: any = { site_id: site, platform: f.platform, base_url: f.base_url.trim(), group: f.group.trim(), model_mapping: f.model_mapping, priority: Number(f.priority), concurrency: Number(f.concurrency), rate_multiplier: Number(f.rate_multiplier), tiers: valid.map((x) => ({ name: x.name.trim(), api_key: x.api_key.trim() })) }
+      if (key.enabled) body.create_key = { enabled: true, email: key.email.trim(), password: key.password }
+      if (mon.enabled) body.monitor = { enabled: true, provider: f.platform, primary_model: mon.primary_model.trim(), interval_seconds: Number(mon.interval_seconds) }
+      const r = await api.doUpstreamImport(body)
+      if (r.error) throw new Error(r.error)
+      setResult(r)
+      toast(`✓ ${t.upResultAcc} ${r.created}/${r.total}${r.monitor_id ? ' · monitor✓' : ''}${r.key ? ' · key✓' : ''}`)
+      if (!r.key) onDone()
+    } catch (e: any) { toast(String(e.message || e), 'err') } finally { setBusy(false) }
   }
+
+  if (result) return <Modal title={t.upstreamTitle} onClose={() => onDone()} actions={<button className="btn btn-primary" onClick={() => onDone()}>{t.close}</button>}>
+    <div className="notice" style={{ textAlign: 'left' }}>
+      <b>✓ {t.upDone}</b>
+      <div style={{ marginTop: 8 }}>{t.upResultAcc}: {result.created}/{result.total} · {t.upGroup} #{result.group_id}{result.monitor_id ? ` · ${t.upMonitor} #${result.monitor_id}` : ''}</div>
+      {(result.monitor_error || result.key_error) && <div style={{ marginTop: 6, color: 'var(--warning)' }}>{[result.monitor_error, result.key_error].filter(Boolean).join('；')}</div>}
+      {result.accounts?.some((a: any) => a.error) && <div style={{ marginTop: 6, color: 'var(--danger)' }}>{result.accounts.filter((a: any) => a.error).map((a: any) => `${a.name}: ${a.error}`).join('；')}</div>}
+      {result.key && <>
+        <div style={{ marginTop: 12, fontWeight: 700, color: 'var(--danger)' }}>⚠ {t.upKeyOnce}</div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+          <code style={{ flex: 1, fontSize: 12, wordBreak: 'break-all', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 8, padding: 8 }}>{result.key.key}</code>
+          <button className="btn btn-sm" onClick={() => { navigator.clipboard?.writeText(result.key.key); toast(t.sitePubkeyCopied) }}>{lang === 'zh' ? '复制' : 'Copy'}</button>
+        </div>
+      </>}
+    </div>
+  </Modal>
+
   return <Modal title={t.upstreamTitle} desc={t.upstreamDesc} onClose={onClose} actions={<><button className="btn" onClick={onClose}>{t.cancel}</button><button className="btn btn-primary" onClick={submit} disabled={busy}>{busy ? <><Spinner /> {t.upstreamImport}</> : t.upstreamImport}</button></>}>
-    <label>{t.upstreamBaseUrl}</label><input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://upstream.example.com/v1" />
-    <label>{t.upstreamTiers}</label><textarea value={tiers} onChange={(e) => setTiers(e.target.value)} placeholder={'plus,sk-xxx,1\npro,sk-yyy,2'} />
+    <div className="field-row">
+      <div><label>{t.upPlatform}</label><select value={f.platform} onChange={(e) => set('platform', e.target.value)}><option value="openai">openai</option><option value="anthropic">anthropic</option><option value="gemini">gemini</option></select></div>
+      <div><label>{t.upGroup}</label><input value={f.group} onChange={(e) => set('group', e.target.value)} placeholder={t.upGroupPh} /></div>
+    </div>
+    <label>{t.upstreamBaseUrl}</label><input value={f.base_url} onChange={(e) => set('base_url', e.target.value)} placeholder="https://relay.example.com/v1" />
+    <label>{t.upTiers}</label>
+    {tiers.map((x, i) => <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+      <input style={{ flex: '0 0 38%' }} value={x.name} onChange={(e) => setTier(i, 'name', e.target.value)} placeholder={t.upRelayName} />
+      <input style={{ flex: 1 }} value={x.api_key} onChange={(e) => setTier(i, 'api_key', e.target.value)} placeholder="api_key (sk-...)" />
+      <button type="button" className="btn btn-sm" onClick={() => setTiers((ts) => ts.length > 1 ? ts.filter((_, j) => j !== i) : ts)} disabled={tiers.length <= 1}>×</button>
+    </div>)}
+    <button type="button" className="btn btn-sm" onClick={() => setTiers((ts) => [...ts, { name: '', api_key: '' }])}>+ {t.upAddTier}</button>
+    <label style={{ marginTop: 12 }}>{t.upModelMap}</label><textarea style={{ minHeight: 54 }} value={f.model_mapping} onChange={(e) => set('model_mapping', e.target.value)} placeholder={'gpt-5.5:gpt-5.5  (每行 源:目标，可空，所有档共用)'} />
+    <div className="field-row"><div><label>{t.opPriority}</label><input type="number" value={f.priority} onChange={(e) => set('priority', e.target.value)} /></div><div><label>{t.opConcurrency}</label><input type="number" value={f.concurrency} onChange={(e) => set('concurrency', e.target.value)} /></div></div>
+
+    <div className="notice" style={{ textAlign: 'left', marginTop: 12, fontSize: 13 }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, margin: 0 }}><input type="checkbox" style={{ width: 16, height: 16 }} checked={key.enabled} onChange={(e) => setKey((o: any) => ({ ...o, enabled: e.target.checked }))} />{t.upCreateKey}</label>
+      {key.enabled && <div style={{ marginTop: 8 }}>
+        <div className="field-row">
+          <div><label>{t.upUserEmail}</label><input value={key.email} onChange={(e) => setKey((o: any) => ({ ...o, email: e.target.value }))} placeholder="admin@sub2api.local" /></div>
+          <div><label>{t.upUserPass}</label><input type="password" value={key.password} onChange={(e) => setKey((o: any) => ({ ...o, password: e.target.value }))} /></div>
+        </div>
+        <small className="muted">{t.upKeyLoginHint}</small>
+      </div>}
+    </div>
+
+    <div className="notice" style={{ textAlign: 'left', marginTop: 10, fontSize: 13 }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, margin: 0 }}><input type="checkbox" style={{ width: 16, height: 16 }} checked={mon.enabled} onChange={(e) => setMon((o: any) => ({ ...o, enabled: e.target.checked }))} />{t.upMonitor}</label>
+      {mon.enabled && <div style={{ marginTop: 8 }}>
+        <div className="field-row">
+          <div><label>{t.upMonModel}</label><input value={mon.primary_model} onChange={(e) => setMon((o: any) => ({ ...o, primary_model: e.target.value }))} placeholder="gpt-5.5" /></div>
+          <div><label>{t.upMonInterval}</label><input type="number" value={mon.interval_seconds} onChange={(e) => setMon((o: any) => ({ ...o, interval_seconds: e.target.value }))} placeholder="60 (15-3600)" /></div>
+        </div>
+        <small className="muted">{t.upMonHint}</small>
+      </div>}
+    </div>
   </Modal>
 }
 

@@ -13,7 +13,7 @@
 | `sourceTokens.ts` | §10 token 实时回源(本机 pg / 远程 ssh psql) | site_id | {id:tokenRow} | sites | `source_tokens.py` |
 | `prober.ts` | 直连 chatgpt codex 探活+真实额度(经 CONSOLE_PROBE_PROXY 出墙) | tokenRow | verdict+额度 | node:https、socks-proxy-agent | `prober.py` |
 | `inventory.ts` | **按账号类型分流**盘点：oauth→codex 直探(真实额度)、apikey/中转→`adminApi.testAccount` 实测上游；聚合+写快照(并发池+进度) | site/group/ids | results | prober、adminApi、sourceTokens、db | `inventory.py` |
-| `importer.ts` | 分批导入 + 中转接入(仅写批次元数据) | cpa_list/tiers | batch/results | adminApi、db | `importer.py`+`_upstream_import` |
+| `importer.ts` | 分批导入(codex-session) + **中转接入**(支持批量多档 tiers[]：①建 apikey 账号 credentials={base_url,api_key,model_mapping} ②建/绑分组 group_ids ③可选经 sub2api 用户登录 JWT 建使用 key(adminApi.createUsageKey，明文一次返回不落库) ④可选建渠道监控 endpoint=base_url origin) | tiers[]/单档 + 可选 create_key/monitor | 结果(accounts/key/monitor) | adminApi、db | `importer.py`+`_upstream_import` |
 | `pool.ts` | 账号合并/分组/批次/池总览/批量编辑/回收站/删批次组 | site/body | rows/聚合 | adminApi、sourceTokens、db | `web_server` _merge/_pool_overview/_batches/_bulk/... |
 | `cleanup.ts` | 失效号异步清理(进度+急停+回收快照) | site/ids | 状态 | adminApi、sourceTokens、db | `web_server._run_cleanup` |
 | `users.ts` | 用户列表 + 改 role 提权(本机 pg/远程 ssh) + 启禁(admin API) | site/body | rows/结果 | sites、adminApi | `web_server` 用户段+`_pg_set_role` |
