@@ -1,0 +1,348 @@
+/* purpose: 账号池页（pool.tsx）专属视觉增强层。仅 token 驱动、pool- 前缀，纯视觉无逻辑。 */
+/* 与基础层 App.css 共享 class 共存：此处只做点睛级增强 / 局部覆盖，不重定义共享原语。 */
+
+/* ============================================================
+   1. 页面容器：错峰入场（沿用基础层 cardIn 节奏，仅 transform/opacity）
+   ============================================================ */
+.pool-page { animation: poolPageIn var(--dur-base) var(--ease-out) both; }
+@keyframes poolPageIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ============================================================
+   2. 总览：分组卡区。grp-card 由基础层管，这里仅给「按分组」面板下的
+      分组标题与统计列加扫读增强 + 分组徽标点。
+   ============================================================ */
+.pool-grp-section { margin-top: 16px; }
+.pool-grp-section .grp-card { position: relative; overflow: hidden; }
+/* 卡片左侧细色条，强化「这是一个分组」的对象感 */
+.pool-grp-section .grp-card::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: linear-gradient(180deg, var(--grad-blue-from), var(--grad-blue-to));
+  opacity: .85;
+}
+.pool-grp-section .grp-card h3 { padding-left: 2px; }
+/* 统计三联：用细分隔提升对照扫读 */
+.pool-grp-section .grp-stats { gap: 18px; }
+.pool-grp-section .grp-stats div + div { padding-left: 18px; border-left: 1px solid var(--hairline); }
+
+/* 搜索框：在 toolbar 中占主宽（原内联 flex:1 1 240px） */
+.pool-search { flex: 1 1 240px; }
+
+/* ============================================================
+   3. 账号表：密集表格扫读增强
+   ============================================================ */
+/* 表头列名加字距强化扫读（不吸顶：表格随页面整体滚动，吸顶会与 sticky 顶栏冲突） */
+.pool-acct-table thead th {
+  letter-spacing: .02em;
+  text-transform: none;
+  font-size: 12px;
+}
+/* 复选列与单元格垂直居中对齐，复选框不挤压 */
+.pool-acct-table .col-check { vertical-align: middle; }
+/* 行 hover：在基础层 surface-2 之上加一道左色条作为「当前行」指示 */
+.pool-acct-table tbody tr { transition: background var(--dur-fast); }
+.pool-acct-table tbody tr td:first-child { position: relative; }
+.pool-acct-table tbody tr:hover td:first-child::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+  background: var(--primary);
+}
+/* 选中行高亮：复选框打勾时整行底色（:has 现代浏览器支持，无则优雅退化为普通行） */
+.pool-acct-table tbody tr:has(.col-check input:checked) { background: var(--soft-blue); }
+.pool-acct-table tbody tr:has(.col-check input:checked) td:first-child::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--primary);
+}
+/* ID / status mono 列右侧留白更整齐 */
+.pool-acct-table td.mono { font-variant-numeric: tabular-nums; }
+/* usage 列：保证用量条不被挤窄 */
+.pool-acct-table .usage { min-width: 96px; }
+
+/* ============================================================
+   4. UpstreamModal（中转接入）：拓宽弹层 + 分组块卡片化 + 折叠区观感
+      仅视觉重排，表单逻辑/字段/handler 在 tsx 中零改动。
+   ============================================================ */
+/* 该弹层内容多（多分组 + 折叠区），给它更宽的画布。
+   Modal 组件 className 固定为 .modal（基础层，不可改 props），
+   故用 :has 命中含本页表单/结果标记的弹层来加宽，纯 CSS、token 驱动。 */
+.modal:has(.pool-up-shared),
+.modal:has(.pool-up-result) { width: min(660px, 100%); }
+
+/* 顶部「全批共享」参数区：用浅底块圈起来，与下方分组块区分 */
+.pool-up-shared {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  margin-bottom: 4px;
+}
+.pool-up-shared > label:first-child { margin-top: 0; }
+/* 模型映射框较短（原内联 minHeight:48）。.modal textarea 基础特异性 (0,1,1)，需提升。 */
+.modal textarea.pool-up-modelmap { min-height: 48px; }
+
+/* 分组块：从「虚线 notice」升级为实体卡片，建立清晰的对象边界 */
+.pool-up-group {
+  text-align: left;
+  margin-top: 14px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  padding: 14px;
+  box-shadow: var(--shadow-sm);
+}
+:root[data-theme="dark"] .pool-up-group { background: var(--surface-2); }
+
+/* 分组头：序号徽章 + 名称输入 + 删除 */
+.pool-up-group-head { display: flex; gap: 8px; align-items: center; }
+.pool-up-group-head input { flex: 1; }
+.pool-up-group-badge {
+  flex: 0 0 auto;
+  display: inline-flex; align-items: center;
+  height: 24px; padding: 0 10px;
+  border-radius: var(--radius-full);
+  background: var(--soft-blue); color: var(--primary-text);
+  font-size: 12px; font-weight: 800;
+  white-space: nowrap;
+}
+
+/* 账号行：name + api_key + 删除按钮。
+   注意：.modal label 基础规则特异性为 (0,1,1)，故这些 label 增强需用 .modal 前缀
+   提升特异性以覆盖 display/font-weight，否则被基础规则压回 block。 */
+.modal label.pool-up-group-label { margin-top: 10px; }
+.pool-up-acct-row { display: flex; gap: 8px; margin-bottom: 6px; align-items: center; }
+.pool-up-acct-row .pool-up-acct-name { flex: 0 0 38%; }
+.pool-up-acct-row .pool-up-acct-key { flex: 1; }
+/* 行删按钮（×）做成定宽方形，视觉更整齐 */
+.pool-up-acct-del { flex: 0 0 auto; min-width: 34px; padding-left: 0; padding-right: 0; text-align: center; }
+
+/* 折叠区（建 key / 渠道监控）：用分隔线 + 标题作为可展开区段 */
+.pool-up-section {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.pool-up-section + .pool-up-section { margin-top: 8px; }
+.modal label.pool-up-toggle {
+  display: flex; align-items: center; gap: 8px;
+  font-weight: 700; margin: 0; cursor: pointer;
+  color: var(--text-2);
+}
+.pool-up-toggle input { width: 16px; height: 16px; margin: 0; }
+/* 折叠展开的内容区：缩进 + 浅底，表明从属于上方开关 */
+.pool-up-fold {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+:root[data-theme="dark"] .pool-up-fold { background: var(--bg); }
+.pool-up-fold > label:first-child { margin-top: 0; }
+.modal label.pool-up-subtoggle {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 8px; font-weight: 400; color: var(--text-2);
+}
+.pool-up-subtoggle input { width: 14px; height: 14px; margin: 0; }
+.pool-up-hint { display: block; margin-top: 6px; }
+/* override 子表单与上方开关留距（原内联 marginTop:8） */
+.pool-up-override { margin-top: 8px; }
+
+/* 「+ 加分组 / + 加账号」按钮（基础 btn-sm 样式）仅与上方内容留距 */
+.pool-up-add { margin-top: 10px; }
+
+/* ============================================================
+   5. UpstreamModal 结果态：按分组列出，强化成功/错误/key 的层次
+   ============================================================ */
+.pool-up-result { text-align: left; }
+.pool-up-result-head { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.pool-up-result-group {
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.pool-up-result-title { font-weight: 700; color: var(--text); }
+.pool-up-result-warn { margin-top: 4px; color: var(--warning-text); font-size: 12px; }
+.pool-up-result-err  { margin-top: 4px; color: var(--danger-text); font-size: 12px; }
+.pool-up-key-label { margin-top: 8px; font-weight: 700; color: var(--danger); }
+.pool-up-key-row { display: flex; gap: 8px; margin-top: 6px; align-items: stretch; }
+/* .modal code 基础规则 color:var(--text) 特异性 (0,1,1)，用 code.前缀 同级 + 源序在后覆盖；
+   key 是要复制的敏感串，用最高对比 --text 即可，此处保持一致 */
+code.pool-up-key-code {
+  flex: 1; font-size: 12px; word-break: break-all;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text);
+}
+
+/* ============================================================
+   6. 进度面板（盘点/清理）：与普通 panel 区分，给一道动感顶边
+   ============================================================ */
+.pool-progress { margin-bottom: 12px; }
+.pool-progress-head {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 12px; font-weight: 700; color: var(--text);
+}
+
+/* ============================================================
+   7. 批次页描述
+   ============================================================ */
+.pool-batches-desc { margin-top: -6px; margin-bottom: 14px; }
+
+/* ============================================================
+   8. 响应式：窄屏堆叠
+   ============================================================ */
+@media (max-width: 640px) {
+  .pool-up-acct-row { flex-wrap: wrap; }
+  .pool-up-acct-row .pool-up-acct-name { flex: 1 1 100%; }
+  .pool-up-acct-row .pool-up-acct-key { flex: 1 1 calc(100% - 42px); }
+  .pool-grp-section .grp-stats div + div { padding-left: 14px; }
+}
+
+/* 尊重 reduce-motion（基础层已有全局兜底，这里冗余声明确保页面入场也被关） */
+@media (prefers-reduced-motion: reduce) {
+  .pool-page { animation: none; }
+}
+
+/* ====== 导入：拖拽/点击上传文件 ====== */
+.import-drop {
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 14px 12px;
+  margin-bottom: 8px;
+  text-align: center;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.import-drop:hover, .import-drop.over {
+  border-color: var(--primary);
+  background: var(--surface-2);
+  color: var(--text);
+}
+.import-files { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.import-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 6px 3px 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+}
+.import-file-chip button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+.import-file-chip button:hover { color: var(--danger); }
+
+/* ============================================================
+   9. 分组管理（GroupManagePage）：主从布局 = 左有序分组列表 / 右账号管理面板
+   ============================================================ */
+.grp-head { margin-bottom: 14px; }
+.grp-title { margin: 0 0 4px; font-size: 17px; font-weight: 800; color: var(--text); }
+.grp-desc { margin: 0; font-size: 13px; line-height: 1.5; max-width: 760px; }
+
+/* 主从两栏：左固定宽分组列表，右账号面板自适应 */
+.grp-mgr .grp-layout { display: grid; grid-template-columns: 264px minmax(0, 1fr); gap: 16px; align-items: start; }
+
+/* 左：有序、可搜索、可滚动的分组列表（为分组多了后快速管理） */
+.grp-list { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-sm); overflow: hidden; position: sticky; top: 88px; }
+.grp-list-head { padding: 12px; border-bottom: 1px solid var(--hairline); display: flex; flex-direction: column; gap: 8px; }
+.grp-list-search { width: 100%; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); color: var(--text); font-size: 13px; box-sizing: border-box; }
+.grp-list-search:focus { outline: none; border-color: var(--primary); }
+.grp-sort { align-self: stretch; }
+.grp-sort .seg-btn { flex: 1; }
+.grp-list-items { max-height: 62vh; overflow-y: auto; padding: 6px; }
+.grp-list-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; border: 1px solid transparent; background: transparent; border-radius: var(--radius); padding: 9px 11px; margin-bottom: 4px; cursor: pointer; text-align: left; transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out); }
+.grp-list-item:hover { background: var(--surface-2); }
+.grp-list-item.active { background: var(--soft-blue); border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary) inset; }
+.grp-list-name { min-width: 0; flex: 1; font-weight: 600; font-size: 13.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grp-list-item.active .grp-list-name { color: var(--primary-text); }
+.grp-list-count { flex: none; min-width: 24px; text-align: center; font-size: 12px; font-weight: 700; color: var(--muted); background: var(--surface-2); border-radius: var(--radius-full); padding: 1px 9px; font-variant-numeric: tabular-nums; }
+.grp-list-item.active .grp-list-count { background: var(--surface); color: var(--primary-text); }
+.grp-list-empty { padding: 18px; text-align: center; font-size: 13px; }
+/* 拖拽排序（仅自定义模式）：grip 把手 + 被拖项淡出 + 提示 */
+.grp-reorder-hint { display: flex; align-items: center; gap: 4px; font-size: 11px; padding: 0 2px; }
+.grp-list-item.draggable { cursor: grab; }
+.grp-list-item.dragging { opacity: .45; }
+.grp-grip { display: inline-flex; align-items: center; flex: none; color: var(--muted); cursor: grab; }
+.grp-list-item:hover .grp-grip { color: var(--text-2); }
+
+/* 右：账号管理面板（工具条 + 批量栏 + 账号表） */
+.grp-detail { min-width: 0; }
+.grp-toolbar { align-items: center; }
+.grp-detail-count { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.grp-pick-hint { margin: 0; }
+
+/* 窄屏：上下堆叠，列表取消 sticky */
+@media (max-width: 900px) {
+  .grp-mgr .grp-layout { grid-template-columns: 1fr; }
+  .grp-list { position: static; }
+  .grp-list-items { max-height: 38vh; }
+}
+
+/* ====== 账号用量：5h / 7d 两条进度（oauth 才有；api 显示 —） ====== */
+.usage-2 { display: flex; flex-direction: column; gap: 3px; }
+.usage-row { display: flex; align-items: center; gap: 6px; }
+.usage-lbl { width: 18px; flex-shrink: 0; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+
+/* ====== 本组 API 密钥面板 ====== */
+.gk-panel { margin-top: 16px; }
+.gk-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 12px; }
+.gk-title { display: flex; align-items: center; gap: 7px; font-weight: 700; font-size: 14px; color: var(--text); }
+.gk-title svg { width: 16px; height: 16px; color: var(--primary); }
+.gk-badge { min-width: 22px; text-align: center; font-size: 11px; font-weight: 700; color: var(--primary-text); background: var(--soft-blue); border-radius: var(--radius-full); padding: 1px 8px; font-variant-numeric: tabular-nums; }
+.gk-desc { font-size: 12px; }
+.gk-noadmin { display: flex; align-items: flex-start; gap: 8px; }
+.gk-noadmin svg { width: 15px; height: 15px; flex: none; margin-top: 1px; color: var(--warning-text); }
+
+/* 新建：名称 + 按钮 */
+.gk-create { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+.gk-name-input {
+  flex: 1; max-width: 360px; padding: 7px 10px; font-size: 13px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text);
+}
+.gk-name-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px var(--soft-blue); }
+
+/* 新建后明文一次性展示（高对比、醒目，呼应中转接入的 key 展示） */
+.gk-plain { border: 1px solid var(--danger); border-radius: var(--radius-md); padding: 12px; margin-bottom: 12px; background: var(--surface-2); }
+.gk-plain-top { display: flex; justify-content: space-between; align-items: center; }
+.gk-plain-lbl { display: flex; align-items: center; gap: 6px; font-weight: 700; color: var(--danger); }
+.gk-plain-lbl svg { width: 15px; height: 15px; }
+.gk-plain-row { display: flex; gap: 8px; align-items: stretch; margin-top: 8px; }
+code.gk-plain-key {
+  flex: 1; font-size: 12px; word-break: break-all;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text);
+}
+.gk-plain-hint { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12px; color: var(--warning-text); }
+.gk-plain-hint svg { width: 14px; height: 14px; flex: none; }
+
+/* 密钥表 */
+.gk-table .gk-key-cell { max-width: 240px; }
+.gk-key-wrap { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.gk-key-wrap .trunc { min-width: 0; }
+.gk-copy-btn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; cursor: pointer;
+  color: var(--muted); background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast);
+}
+.gk-copy-btn svg { width: 13px; height: 13px; }
+.gk-copy-btn:hover { color: var(--primary-text); border-color: var(--primary); background: var(--soft-blue); }
+.gk-table .gk-date { font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.gk-col-act { width: 1%; text-align: right; white-space: nowrap; }
+.gk-col-act .danger-pill { padding: 4px 8px; }
+.gk-col-act .danger-pill svg { width: 14px; height: 14px; }

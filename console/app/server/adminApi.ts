@@ -73,6 +73,8 @@ export class AdminApi {
     return this.req<{ items?: AdminGroup[] } | AdminGroup[]>('GET', `/admin/groups?page=${page}&page_size=${pageSize}`)
   }
   deleteGroup(groupId: number) { return this.req('DELETE', `/admin/groups/${groupId}`) }
+  /** 持久化分组显示顺序：updates=[{id, sort_order}]，sort_order 越小越靠前。 */
+  updateGroupSortOrder(updates: Array<{ id: number; sort_order: number }>) { return this.req('PUT', '/admin/groups/sort-order', { updates }) }
 
   // ---- 账号 ----
   importCodexSession(body: Record<string, unknown>) {
@@ -80,6 +82,8 @@ export class AdminApi {
   }
   createAccount(body: Record<string, unknown>) { return this.req('POST', '/admin/accounts', body) }
   getAccount(accountId: number) { return this.req<AdminAccount>('GET', `/admin/accounts/${accountId}`) }
+  /** 单号字段更新（写 group_ids 会 REPLACE 该号整套分组，调用方须先读旧集合再并/减后整套回写）。 */
+  updateAccount(accountId: number, fields: Record<string, unknown>) { return this.req('PUT', `/admin/accounts/${accountId}`, fields) }
 
   listAccounts(opts: { group?: number; status?: string; platform?: string; page?: number; pageSize?: number; search?: string } = {}) {
     let q = `?page=${opts.page || 1}&page_size=${opts.pageSize || 200}`
@@ -159,22 +163,45 @@ export class AdminApi {
   // ---- 渠道监控 ----
   createChannelMonitor(body: Record<string, unknown>) { return this.req('POST', '/admin/channel-monitors', body) }
 
-  /**
-   * 「使用用」API Key：sub2api 仅用户态 POST /keys 能创建(需登录 JWT，admin-api-key 不行)。
-   * 用传入的 sub2api 用户邮箱+密码登录拿 JWT，再建 key 绑分组；返回 {id, key(明文，仅此一次)}。
-   */
-  async createUsageKey(email: string, password: string, body: { name: string; group_id: number }): Promise<{ id: number; key: string }> {
+  // ---- 「使用用」API Key（用户态，admin-api-key 不可；用站点管理员登录换 JWT）----
+  // sub2api 一个 key 绑定 0/1 个分组（group_id 单值，非多对多）；明文 key 仅创建时返回一次。
+  /** 用户态登录换取 JWT。 */
+  private async userLogin(email: string, password: string): Promise<string> {
     const lr = await fetch(this.base + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) })
     const lj: any = await lr.json().catch(() => ({}))
     if (lr.status >= 400) throw new ApiError(`登录失败(${lr.status}): ${JSON.stringify(lj).slice(0, 120)}`)
     const jwt = (lj.data || lj || {}).access_token
     if (!jwt) throw new ApiError('登录响应缺 access_token')
-    const kr = await fetch(this.base + '/keys', { method: 'POST', headers: { Authorization: `Bearer ${jwt}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-    const kj: any = await kr.json().catch(() => ({}))
-    if (kr.status >= 400) throw new ApiError(`建 key 失败(${kr.status}): ${JSON.stringify(kj).slice(0, 120)}`)
-    const d = kj.data || kj
-    if (!d.key) throw new ApiError('建 key 响应缺明文 key')
+    return jwt
+  }
+  /** 用户态(JWT) 请求，自动解包 {data}。 */
+  private async userReq<T = any>(jwt: string, method: string, path: string, body?: unknown): Promise<T> {
+    const r = await fetch(this.base + path, { method, headers: { Authorization: `Bearer ${jwt}`, ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}) }, body: body !== undefined ? JSON.stringify(body) : undefined })
+    const text = await r.text()
+    let j: any
+    try { j = text ? JSON.parse(text) : {} } catch { throw new ApiError(`${method} ${path} -> ${r.status}: ${text.slice(0, 150)}`) }
+    if (r.status >= 400) throw new ApiError(`${method} ${path} -> ${r.status}: ${JSON.stringify(j).slice(0, 200)}`)
+    return (j && typeof j === 'object' && 'data' in j) ? j.data : j
+  }
+  /** 建「使用用」key 绑分组；返回 {id, key(明文，仅此一次)}。 */
+  async createUsageKey(email: string, password: string, body: { name: string; group_id: number }): Promise<{ id: number; key: string }> {
+    const jwt = await this.userLogin(email, password)
+    const d: any = await this.userReq(jwt, 'POST', '/keys', body)
+    if (!d || !d.key) throw new ApiError('建 key 响应缺明文 key')
     return { id: d.id, key: d.key }
+  }
+  /** 列某分组下的 key（用户态：仅该管理员账号名下、绑定该组的 key；上游无跨用户 admin 列 key 端点）。 */
+  async listGroupKeys(email: string, password: string, groupId: number): Promise<{ items: any[]; total: number }> {
+    const jwt = await this.userLogin(email, password)
+    const d: any = await this.userReq(jwt, 'GET', `/keys?group_id=${groupId}&page=1&page_size=200&sort_by=created_at&sort_order=desc`)
+    const items = Array.isArray(d) ? d : (d?.items || [])
+    const total = Array.isArray(d) ? items.length : (d?.total ?? items.length)
+    return { items, total }
+  }
+  /** 删除 key（sub2api 软删：置 deleted_at + tombstone）。 */
+  async deleteUsageKey(email: string, password: string, keyId: number): Promise<void> {
+    const jwt = await this.userLogin(email, password)
+    await this.userReq(jwt, 'DELETE', `/keys/${keyId}`)
   }
 
   // ---- 代理 ----
@@ -195,4 +222,13 @@ export class AdminApi {
     return out
   }
   setUserStatus(uid: number, status: string) { return this.req('PUT', `/admin/users/${uid}`, { status }) }
+  /** 删用户（sub2api 软删：置 deleted_at + 级联软删其 API key；admin 角色后端硬拒）。无批量端点 → 调用方逐个删。 */
+  deleteUser(uid: number) { return this.req('DELETE', `/admin/users/${uid}`) }
+  /**
+   * 拉一页 usage_logs（含 user_id / ip_address / created_at）。sub2api 不存注册/登录 IP，
+   * usage_logs.ip_address 是唯一可经 admin API 拿到的用户 IP；端点无 ip 过滤，故只能拉回来在外面建映射。
+   */
+  listUsage(page = 1, pageSize = 1000) {
+    return this.req<{ items?: any[]; total?: number }>('GET', `/admin/usage?page=${page}&page_size=${pageSize}&sort_by=created_at&sort_order=desc`)
+  }
 }

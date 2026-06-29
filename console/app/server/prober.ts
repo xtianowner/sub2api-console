@@ -12,7 +12,7 @@ const ACCOUNTS_CHECK_URL = 'https://chatgpt.com/backend-api/accounts/check/v4-20
 const CODEX_URL = 'https://chatgpt.com/backend-api/codex/responses'
 const DEFAULT_UA = 'Mozilla/5.0'
 
-// openai 出口代理：43(国内)直连不通 chatgpt.com → 经 CONSOLE_PROBE_PROXY(socks5h://...) 出墙。空=直连。
+// openai 出口代理：国内机直连不通 chatgpt.com → 经 CONSOLE_PROBE_PROXY(socks5h://...) 出墙。空=直连。
 const PROBE_PROXY = process.env.CONSOLE_PROBE_PROXY || ''
 const proxyAgent = PROBE_PROXY ? new SocksProxyAgent(PROBE_PROXY) : undefined
 
@@ -130,7 +130,8 @@ function accountIdFromIdToken(idToken: string | null): string | null {
 export interface ProbeResult {
   sub2_account_id: number; cpa_email: string | null; verdict: string | null
   plan_type: string | null; is_deactivated: boolean | null
-  used_5h_percent: number | null; used_primary_percent: number | null
+  // codex 限流窗口：primary=5h、secondary=7d(周)。字段名按真实窗口命名，避免再被写反。
+  used_5h_percent: number | null; used_7d_percent: number | null
   primary_reset_after_seconds: number | null; primary_reset_at: number | null
   secondary_reset_at: number | null; primary_window_minutes: number | null
   check_status: number | null; probe_status: number | string | null
@@ -140,7 +141,7 @@ export async function probeOne(tokenRow: TokenRow, model?: string): Promise<Prob
   const at = tokenRow.access_token
   const base: ProbeResult = {
     sub2_account_id: tokenRow.sub2_account_id, cpa_email: tokenRow.cpa_email || null, verdict: null,
-    plan_type: null, is_deactivated: null, used_5h_percent: null, used_primary_percent: null,
+    plan_type: null, is_deactivated: null, used_5h_percent: null, used_7d_percent: null,
     primary_reset_after_seconds: null, primary_reset_at: null, secondary_reset_at: null,
     primary_window_minutes: null, check_status: null, probe_status: null,
   }
@@ -159,11 +160,11 @@ export async function probeOne(tokenRow: TokenRow, model?: string): Promise<Prob
     verdict: classify(chk, prb),
     plan_type: chk.plan_type || u.plan_type || prb.plan_type || null,
     is_deactivated: chk.is_deactivated,
-    used_5h_percent: u.secondary_used_percent ?? null,
-    used_primary_percent: u.primary_used_percent ?? null,
+    used_5h_percent: u.primary_used_percent ?? null,      // 5h = primary window
+    used_7d_percent: u.secondary_used_percent ?? null,    // 7d = secondary(weekly) window
     primary_reset_after_seconds: u.primary_reset_after_seconds ?? prb.resets_at ?? null,
-    primary_reset_at: u.primary_reset_at ?? prb.resets_at ?? null,
-    secondary_reset_at: u.secondary_reset_at ?? null,
+    primary_reset_at: u.primary_reset_at ?? prb.resets_at ?? null,   // 5h 重置
+    secondary_reset_at: u.secondary_reset_at ?? null,               // 7d 重置
     primary_window_minutes: u.primary_window_minutes ?? null,
     check_status: chk.http_status,
     probe_status: prb.http_status,

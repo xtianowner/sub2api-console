@@ -3,13 +3,20 @@ import './App.css'
 import { getSession, logout as apiLogout, type SiteInfo } from './api'
 import { copy, cls, ToastProvider, type Lang } from './lib'
 import { Observability, type ObsPage } from './pages/observability'
-import { AccountsPage, BatchesPage, PoolOverviewPage, RecyclePage } from './pages/pool'
+import { UsageReport } from './pages/usageReport'
+import { AccountsPage, BatchesPage, GroupManagePage, PoolOverviewPage, RecyclePage } from './pages/pool'
 import { Login, SettingsPage, SitesPage, UsersPage } from './pages/admin'
 
-type PageKey = ObsPage | 'pool' | 'accounts' | 'batches' | 'recycle' | 'users' | 'sites' | 'settings'
+type PageKey = ObsPage | 'pool' | 'accounts' | 'groups' | 'batches' | 'recycle' | 'users' | 'sites' | 'settings'
+type Theme = 'light' | 'dark'
 
 function App() {
   const [lang, setLang] = useState<Lang>(() => (localStorage.getItem('console-lang') as Lang) || 'zh')
+  const [theme, setTheme] = useState<Theme>(() => {
+    const saved = localStorage.getItem('console-theme')
+    if (saved === 'light' || saved === 'dark') return saved
+    return typeof matchMedia !== 'undefined' && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  })
   const [authed, setAuthed] = useState<boolean | null>(null)
   const [pwSet, setPwSet] = useState(true)
   const [sites, setSites] = useState<SiteInfo[]>([])
@@ -32,6 +39,7 @@ function App() {
   }
   useEffect(() => { loadSession() }, [])
   useEffect(() => { localStorage.setItem('console-lang', lang); document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en' }, [lang])
+  useEffect(() => { localStorage.setItem('console-theme', theme); document.documentElement.setAttribute('data-theme', theme) }, [theme])
   useEffect(() => { if (siteId) localStorage.setItem('console-site', String(siteId)) }, [siteId])
 
   const site = useMemo(() => sites.find((s) => s.id === siteId) || sites[0], [sites, siteId])
@@ -44,9 +52,10 @@ function App() {
   const obsItems: Array<{ key: ObsPage; label: string }> = [
     { key: 'overview', label: t.nav_overview }, { key: 'feedback', label: t.nav_feedback },
     { key: 'errors', label: t.nav_errors }, { key: 'slow', label: t.nav_slow }, { key: 'timeline', label: t.nav_timeline },
+    { key: 'usage', label: t.nav_usage },
   ]
   const poolItems: Array<{ key: PageKey; label: string }> = [
-    { key: 'pool', label: t.nav_pool }, { key: 'accounts', label: t.nav_accounts },
+    { key: 'pool', label: t.nav_pool }, { key: 'accounts', label: t.nav_accounts }, { key: 'groups', label: t.nav_groups },
     { key: 'batches', label: t.nav_batches }, { key: 'recycle', label: t.nav_recycle },
   ]
   const adminItems: Array<{ key: PageKey; label: string }> = [
@@ -56,7 +65,7 @@ function App() {
     [...obsItems, ...poolItems, ...adminItems].find((i) => i.key === k)?.label || ''
 
   const showObs = !!site?.observability
-  const needSite = (['pool', 'accounts', 'batches', 'recycle', 'users'] as PageKey[]).includes(page)
+  const needSite = (['pool', 'accounts', 'groups', 'batches', 'recycle', 'users'] as PageKey[]).includes(page)
 
   return (
     <ToastProvider>
@@ -66,6 +75,7 @@ function App() {
           <div className="topbar-actions">
             {sites.length > 0 && <span className="site-switch"><span className={cls('site-dot', site?.health)} /><select value={siteId} onChange={(e) => setSiteId(Number(e.target.value))} style={{ border: 0, background: 'transparent', padding: '2px 4px' }}>{sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></span>}
             <div className="lang-switch segmented" role="group"><button className={lang === 'zh' ? 'active' : ''} onClick={() => setLang('zh')}>中</button><button className={lang === 'en' ? 'active' : ''} onClick={() => setLang('en')}>EN</button></div>
+            <div className="lang-switch segmented theme-switch" role="group" aria-label={t.themeToggle}><button className={theme === 'light' ? 'active' : ''} onClick={() => setTheme('light')} title={t.themeLight} aria-label={t.themeLight}>☀</button><button className={theme === 'dark' ? 'active' : ''} onClick={() => setTheme('dark')} title={t.themeDark} aria-label={t.themeDark}>🌙</button></div>
             <button className="icon-btn" onClick={doLogout}>{t.logout}</button>
           </div>
         </header>
@@ -86,8 +96,12 @@ function App() {
               {(['overview', 'feedback', 'errors', 'slow', 'timeline'] as PageKey[]).includes(page) && (showObs && site
                 ? <Observability page={page as ObsPage} lang={lang} site={site.id} />
                 : <div className="notice">{t.obsUnavailable}</div>)}
+              {page === 'usage' && (showObs && site
+                ? <UsageReport site={site.id} lang={lang} />
+                : <div className="notice">{t.obsUnavailable}</div>)}
               {page === 'pool' && site && <PoolOverviewPage site={site.id} lang={lang} />}
               {page === 'accounts' && site && <AccountsPage siteInfo={site} lang={lang} />}
+              {page === 'groups' && site && <GroupManagePage siteInfo={site} lang={lang} />}
               {page === 'batches' && site && <BatchesPage site={site.id} lang={lang} />}
               {page === 'recycle' && site && <RecyclePage site={site.id} lang={lang} />}
               {page === 'users' && site && <UsersPage siteInfo={site} lang={lang} />}

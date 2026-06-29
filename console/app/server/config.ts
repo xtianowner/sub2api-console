@@ -12,6 +12,12 @@ export const PROBE_MODEL = process.env.CONSOLE_PROBE_MODEL || 'gpt-5.5'
 export const DATABASE_URL = process.env.DATABASE_URL || ''
 export const ADMIN_DATABASE_URL = process.env.ADMIN_DATABASE_URL || DATABASE_URL
 
+// 中转接入「使用用」API Key 的默认 sub2api 管理员登录（建 key 需用户态 JWT，admin-api-key 不行）。
+// 表单留空时回退用它登录 /auth/login 建 key。email 缺省 admin@sub2api.local；
+// 密码填 sub2api 管理员登录密码（非本 console 密码），不入仓库、不打印明文。
+export const SUB2_ADMIN_EMAIL = process.env.CONSOLE_SUB2_ADMIN_EMAIL || 'admin@sub2api.local'
+export const SUB2_ADMIN_PASSWORD = process.env.CONSOLE_SUB2_ADMIN_PASSWORD || ''
+
 function masterKey(): string {
   const env = process.env.CONSOLE_MASTER_KEY
   if (env) return env

@@ -73,7 +73,7 @@ export async function runInventory(opts: {
 
   const transient = (id: number, email: string | null, e: unknown): ProbeResult => ({
     sub2_account_id: id, cpa_email: email, verdict: 'transient', plan_type: null, is_deactivated: null,
-    used_5h_percent: null, used_primary_percent: null, primary_reset_after_seconds: null, primary_reset_at: null,
+    used_5h_percent: null, used_7d_percent: null, primary_reset_after_seconds: null, primary_reset_at: null,
     secondary_reset_at: null, primary_window_minutes: null, check_status: null, probe_status: String(e).slice(0, 60),
   })
 
@@ -88,7 +88,7 @@ export async function runInventory(opts: {
         const t = await client.testAccount(w.id)
         r = {
           sub2_account_id: w.id, cpa_email: null, verdict: t.ok ? 'alive' : classifyApikeyError(t.error),
-          plan_type: null, is_deactivated: null, used_5h_percent: null, used_primary_percent: null,
+          plan_type: null, is_deactivated: null, used_5h_percent: null, used_7d_percent: null,
           primary_reset_after_seconds: null, primary_reset_at: null, secondary_reset_at: null,
           primary_window_minutes: null, check_status: null, probe_status: t.ok ? 200 : t.error.slice(0, 60),
         }
@@ -119,7 +119,8 @@ export async function runInventory(opts: {
     const ins = d.prepare(`INSERT INTO probe_results(site_id,sub2_account_id,probed_at,verdict,codex_5h_pct,codex_7d_pct,plan_type,is_deactivated,http_status,note,primary_reset_at,secondary_reset_at)
                            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
     for (const r of results) {
-      ins.run(siteId, r.sub2_account_id, nowCst(), r.verdict, r.used_5h_percent, r.used_primary_percent,
+      // 列序：codex_5h_pct, codex_7d_pct —— 必须分别写 5h / 7d，别再写反。
+      ins.run(siteId, r.sub2_account_id, nowCst(), r.verdict, r.used_5h_percent, r.used_7d_percent,
         r.plan_type, r.is_deactivated ? 1 : 0, typeof r.probe_status === 'number' ? r.probe_status : null,
         null, r.primary_reset_at, r.secondary_reset_at)
     }

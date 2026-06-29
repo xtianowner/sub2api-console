@@ -3,7 +3,7 @@
  * §10：只写本地批次元数据(batches，每平台分组一条)，成员/token 一律以 sub2api 为准，不存第二副本。
  */
 import { db, nowCst } from './db.js'
-import { getClient } from './sites.js'
+import { getClient, getSiteAdminLogin } from './sites.js'
 
 function defaultBatchName(): string {
   const d = new Date(Date.now() + 8 * 3600 * 1000)
@@ -13,28 +13,37 @@ function defaultBatchName(): string {
 
 export interface AccountObj { access_token?: string; refresh_token?: string; id_token?: string; email?: string; name?: string; user_agent?: string }
 
-/** 展开账号文件为统一 account 列表。fmt: 'cpa'|'sub2'|undefined(自动)。 */
+/** 把一个 sub2 账号对象(credentials/extra/name) 归一化为 AccountObj 并 push(有 access_token 才收)。 */
+function pushSub2Account(out: Array<[string, AccountObj]>, key: string, a: any): void {
+  const cred = a.credentials || {}
+  const ex = a.extra || {}
+  const acc: AccountObj = {
+    access_token: cred.access_token, refresh_token: cred.refresh_token || ex.refresh_token,
+    id_token: cred.id_token, email: cred.email || ex.email || a.name,
+    user_agent: ex.user_agent || cred.user_agent, name: a.name,
+  }
+  if (acc.access_token) out.push([key, acc])
+}
+
+/** 展开账号文件为统一 account 列表。fmt: 'cpa'|'sub2'|undefined(自动)。
+ * 兼容三种载荷：① CPA 单号(顶层 access_token)；② sub2 导出包裹({accounts:[{credentials...}]})；
+ * ③ sub2 裸账号对象(顶层 credentials，无 accounts)——sub2 导出有时是账号对象数组而非包裹对象。 */
 export function expandInputs(rawList: Array<[string, any]>, fmt?: string): Array<[string, AccountObj]> {
   const out: Array<[string, AccountObj]> = []
   for (const [src, obj] of rawList) {
     if (!obj || typeof obj !== 'object') continue
     const isCpa = !!obj.access_token
-    const isSub2 = Array.isArray(obj.accounts)
+    const isSub2Wrap = Array.isArray(obj.accounts)
+    const isSub2Acct = !isSub2Wrap && !!obj.credentials && typeof obj.credentials === 'object'
+    const isSub2 = isSub2Wrap || isSub2Acct
     if (fmt === 'cpa' && !isCpa) continue
     if (fmt === 'sub2' && !isSub2) continue
     if (isCpa) {
       out.push([src, obj])
-    } else if (isSub2) {
-      obj.accounts.forEach((a: any, i: number) => {
-        const cred = a.credentials || {}
-        const ex = a.extra || {}
-        const acc: AccountObj = {
-          access_token: cred.access_token, refresh_token: cred.refresh_token || ex.refresh_token,
-          id_token: cred.id_token, email: cred.email || ex.email || a.name,
-          user_agent: ex.user_agent || cred.user_agent, name: a.name,
-        }
-        if (acc.access_token) out.push([`${src}#a${i}`, acc])
-      })
+    } else if (isSub2Wrap) {
+      obj.accounts.forEach((a: any, i: number) => pushSub2Account(out, `${src}#a${i}`, a))
+    } else if (isSub2Acct) {
+      pushSub2Account(out, src, obj)
     }
   }
   return out
@@ -114,29 +123,21 @@ const msg = (e: unknown) => String(e instanceof Error ? e.message : e).slice(0, 
 function originOf(url: string): string { try { const u = new URL(url); return `${u.protocol}//${u.host}` } catch { return url } }
 
 /**
- * 中转接入（按 sub2api 真实工作流，支持批量多档）：
- *  ① 建中转账号 type=apikey（credentials={base_url, api_key, model_mapping?}；base_url 仅对 apikey 生效）
- *  ② 建/复用分组并把各档账号绑进去（group_ids）
- *  ③ 可选：经 sub2api 用户登录(JWT) 建「使用用」API Key 绑分组（admin-api-key 无此接口；明文仅返回一次，不落库）
- *  ④ 可选：建渠道监控（监控上游：endpoint=base_url 的 origin，api_key=上游 key）
+ * 中转接入（按 sub2api 真实工作流，支持一次建多个分组、不同账号绑不同分组）。
+ * 每个分组独立闭包：① 建/复用分组(POST /admin/groups，rate_multiplier 须>0)
+ *  ② 建 type=apikey 账号并 inline group_ids:[gid] 绑该组（无独立绑定端点；credentials={base_url,api_key,model_mapping?}）
+ *  ③ 可选：用户登录(JWT) 建「使用用」API Key 绑该组（POST /keys，group_id 单值=一 key 一组；明文仅返回一次，不落库）
+ *  ④ 可选：建渠道监控（group_name 仅展示标签、无外键；endpoint=base_url 的 https 纯 origin）
+ * 全程只调官方 admin REST + 用户 /keys，不改 sub2api 源码(L1)。base_url/platform/model_mapping 整批共享(同一上游)。
+ * 兼容旧单组载荷：无 body.groups 时把 tiers[]/单档+body.group+顶层 create_key/monitor 包成一组。
  */
 export async function upstreamImport(body: any): Promise<any> {
   const siteId = Number(body.site_id || 1)
   const platform = body.platform || 'openai'
   const baseUrl = (body.base_url || '').trim()
   if (!baseUrl) return { error: '缺少 base_url' }
-  // 归一化档位：批量 tiers[]，或单档(name+api_key)
-  const raw = (Array.isArray(body.tiers) && body.tiers.length) ? body.tiers
-    : [{ name: body.name, api_key: body.api_key, priority: body.priority, concurrency: body.concurrency, rate_multiplier: body.rate_multiplier }]
-  const tiers = raw.map((t: any) => ({
-    name: (t.name || '').trim(), api_key: (t.api_key || '').trim(),
-    priority: Number(t.priority ?? body.priority ?? 50), concurrency: Number(t.concurrency ?? body.concurrency ?? 10),
-    rate: Number(t.rate_multiplier ?? body.rate_multiplier ?? 1),
-  })).filter((t: any) => t.name && t.api_key)
-  if (!tiers.length) return { error: '至少一档需填 账号名 + api_key' }
-  const c = getClient(siteId)
 
-  // model_mapping 共享：对象，或 "src:dst"/"src=dst" 每行
+  // model_mapping 整批共享：对象，或 "src:dst"/"src=dst" 每行
   let modelMapping: Record<string, string> | undefined
   if (body.model_mapping && typeof body.model_mapping === 'object') modelMapping = body.model_mapping
   else if (typeof body.model_mapping === 'string' && body.model_mapping.trim()) {
@@ -145,72 +146,116 @@ export async function upstreamImport(body: any): Promise<any> {
     if (Object.keys(m).length) modelMapping = m
   }
 
-  // ① 分组（复用同名或新建；默认用首档名）
-  let gid: number | null = body.group_id ? Number(body.group_id) : null
-  const gname = (body.group || '').trim() || tiers[0].name
+  // 账号归一化（账号级覆盖 → 顶层默认）
+  const normAcc = (a: any) => ({
+    name: (a.name || '').trim(), api_key: (a.api_key || '').trim(),
+    priority: Number(a.priority ?? body.priority ?? 50), concurrency: Number(a.concurrency ?? body.concurrency ?? 10),
+    rate: Number(a.rate_multiplier ?? a.rate ?? body.rate_multiplier ?? 1),
+  })
+
+  // 归一化为 groups[]：优先 body.groups；否则把旧 tiers/单档包成单组（向后兼容）
+  let rawGroups: any[]
+  if (Array.isArray(body.groups) && body.groups.length) {
+    rawGroups = body.groups.map((g: any) => ({
+      name: (g.name || '').trim(), group_id: g.group_id ? Number(g.group_id) : null,
+      rate_multiplier: g.rate_multiplier != null ? Number(g.rate_multiplier) : undefined,
+      accounts: (Array.isArray(g.accounts) ? g.accounts : []).map(normAcc).filter((a: any) => a.name && a.api_key),
+      create_key: g.create_key, monitor: g.monitor,
+    }))
+  } else {
+    const rawTiers = (Array.isArray(body.tiers) && body.tiers.length) ? body.tiers
+      : [{ name: body.name, api_key: body.api_key, priority: body.priority, concurrency: body.concurrency, rate_multiplier: body.rate_multiplier }]
+    rawGroups = [{
+      name: (body.group || '').trim(), group_id: body.group_id ? Number(body.group_id) : null,
+      rate_multiplier: undefined as number | undefined,
+      accounts: rawTiers.map(normAcc).filter((a: any) => a.name && a.api_key),
+      create_key: body.create_key, monitor: body.monitor,
+    }]
+  }
+  const groups = rawGroups.filter((g) => g.accounts.length)
+  if (!groups.length) return { error: '至少一个分组需含一个有效账号（账号名 + api_key）' }
+
+  const c = getClient(siteId)
+
+  // 预取分组缓存（name→id），避免每组都拉一次；新建组回填防同名重复建
+  const nameToId = new Map<string, number>()
   try {
+    const gl = await c.listGroups(1, 300)
+    const glist = Array.isArray(gl) ? gl : (gl?.items || [])
+    for (const g of glist) { const n = (g.name || '').trim(); if (n && g.id != null) nameToId.set(n, g.id) }
+  } catch (e) { return { error: `取分组列表失败: ${msg(e)}` } }
+
+  const d = db()
+  const results: any[] = []
+
+  for (const g of groups) {
+    const gname = g.name || g.accounts[0].name
+    const r: any = { group_name: gname, group_id: null, accounts: [], created: 0, total: g.accounts.length }
+
+    // ① 复用/建分组（rate_multiplier 须>0：取组级或首账号 rate）
+    let gid: number | null = g.group_id || nameToId.get(gname) || null
     if (!gid) {
-      const gl = await c.listGroups(1, 300)
-      const glist = Array.isArray(gl) ? gl : (gl?.items || [])
-      const ex = glist.find((g: any) => (g.name || '').trim() === gname)
-      if (ex) gid = ex.id
-      else { const grp: any = await c.createGroup(gname, { platform, rate_multiplier: tiers[0].rate }); gid = (grp && typeof grp === 'object') ? grp.id : grp }
-    }
-  } catch (e) { return { error: `建/取分组失败: ${msg(e)}` } }
-
-  // ② 各档建 apikey 账号并绑分组
-  const accounts: any[] = []
-  for (const t of tiers) {
-    try {
-      const cred: Record<string, unknown> = { base_url: baseUrl, api_key: t.api_key }
-      if (modelMapping) cred.model_mapping = modelMapping
-      const acc: any = await c.createAccount({
-        name: t.name, platform, type: 'apikey', credentials: cred,
-        ...(gid ? { group_ids: [gid] } : {}), priority: t.priority, concurrency: t.concurrency, rate_multiplier: t.rate,
-        confirm_mixed_channel_risk: true,
-      })
-      accounts.push({ name: t.name, account_id: (acc && typeof acc === 'object') ? acc.id : acc })
-    } catch (e) { accounts.push({ name: t.name, error: msg(e) }) }
-  }
-  const created = accounts.filter((a) => a.account_id).length
-
-  // 本地批次元数据
-  if (gid && created) {
-    const d = db()
-    const b = d.prepare('SELECT id FROM batches WHERE site_id=? AND sub2_group_id=?').get(siteId, gid)
-    if (!b) d.prepare(`INSERT INTO batches(site_id,name,sub2_group_id,source_path,imported_at,default_priority,default_concurrency,total_count)
-                       VALUES(?,?,?,?,?,?,?,?)`).run(siteId, gname, gid, 'relay:' + baseUrl, nowCst(), tiers[0].priority, tiers[0].concurrency, created)
-  }
-
-  // ③ 可选：经用户登录建使用 key（明文仅一次返回，不落库）
-  let key: { id: number; key: string } | undefined
-  let keyError: string | undefined
-  if (body.create_key && body.create_key.enabled) {
-    const email = (body.create_key.email || '').trim()
-    const password = body.create_key.password || ''
-    if (!email || !password) keyError = '建 key 需 sub2api 用户邮箱+密码'
-    else if (!gid) keyError = '无分组，跳过建 key'
-    else { try { key = await c.createUsageKey(email, password, { name: `${gname}-key`, group_id: gid }) } catch (e) { keyError = msg(e) } }
-  }
-
-  // ④ 可选渠道监控（监控上游：endpoint=origin，api_key=首档上游 key）
-  let monitorId: number | undefined
-  let monitorError: string | undefined
-  if (body.monitor && body.monitor.enabled) {
-    const endpoint = originOf(baseUrl)
-    if (!endpoint.startsWith('https://')) monitorError = `渠道监控要求 https 的纯 origin，base_url(${endpoint}) 非 https，已跳过`
-    else {
-      const m = body.monitor
       try {
-        const mon: any = await c.createChannelMonitor({
-          name: `${gname}-monitor`, provider: m.provider || platform, endpoint, api_key: tiers[0].api_key,
-          primary_model: (m.primary_model || '').trim(), interval_seconds: Math.min(3600, Math.max(15, Number(m.interval_seconds || 60))),
-          enabled: true, api_mode: m.api_mode || 'chat_completions', extra_models: [], group_name: gname,
-        })
-        monitorId = (mon && typeof mon === 'object') ? mon.id : mon
-      } catch (e) { monitorError = `建渠道监控失败: ${msg(e)}` }
+        const grp: any = await c.createGroup(gname, { platform, rate_multiplier: g.rate_multiplier ?? g.accounts[0].rate })
+        gid = (grp && typeof grp === 'object') ? grp.id : grp
+        if (gid) nameToId.set(gname, gid)
+      } catch (e) { r.group_error = `建/取分组失败: ${msg(e)}`; results.push(r); continue }
     }
+    r.group_id = gid
+
+    // ② 建 apikey 账号并 inline 绑该组
+    for (const a of g.accounts) {
+      try {
+        const cred: Record<string, unknown> = { base_url: baseUrl, api_key: a.api_key }
+        if (modelMapping) cred.model_mapping = modelMapping
+        const acc: any = await c.createAccount({
+          name: a.name, platform, type: 'apikey', credentials: cred,
+          group_ids: [gid], priority: a.priority, concurrency: a.concurrency, rate_multiplier: a.rate,
+          confirm_mixed_channel_risk: true,
+        })
+        r.accounts.push({ name: a.name, account_id: (acc && typeof acc === 'object') ? acc.id : acc })
+      } catch (e) { r.accounts.push({ name: a.name, error: msg(e) }) }
+    }
+    r.created = r.accounts.filter((x: any) => x.account_id).length
+
+    // 本地批次元数据（§10：每分组一条，只写派生元数据）
+    if (gid && r.created) {
+      const b = d.prepare('SELECT id FROM batches WHERE site_id=? AND sub2_group_id=?').get(siteId, gid)
+      if (!b) d.prepare(`INSERT INTO batches(site_id,name,sub2_group_id,source_path,imported_at,default_priority,default_concurrency,total_count)
+                         VALUES(?,?,?,?,?,?,?,?)`).run(siteId, gname, gid, 'relay:' + baseUrl, nowCst(), g.accounts[0].priority, g.accounts[0].concurrency, r.created)
+    }
+
+    // ③ 可选 key（该组；留空回退站点 admin 登录；group_id 单值=一 key 一组）
+    if (g.create_key && g.create_key.enabled) {
+      let email = (g.create_key.email || '').trim()
+      let password = g.create_key.password || ''
+      if (!email || !password) { const def = getSiteAdminLogin(siteId); if (!email) email = def.email; if (!password) password = def.password }
+      if (!gid) r.key_error = '无分组，跳过建 key'
+      else if (!email || !password) r.key_error = '建 key 留空但服务端未配管理员密码：设 CONSOLE_SUB2_ADMIN_PASSWORD 或在表单填写'
+      else { try { r.key = await c.createUsageKey(email, password, { name: `${gname}-key`, group_id: gid }) } catch (e) { r.key_error = msg(e) } }
+    }
+
+    // ④ 可选监控（该组；group_name 仅展示标签；endpoint=https 纯 origin；api_key 取本组首账号）
+    if (g.monitor && g.monitor.enabled) {
+      const endpoint = originOf(baseUrl)
+      if (!endpoint.startsWith('https://')) r.monitor_error = `渠道监控要求 https 的纯 origin，base_url(${endpoint}) 非 https，已跳过`
+      else {
+        const m = g.monitor
+        try {
+          const mon: any = await c.createChannelMonitor({
+            name: `${gname}-monitor`, provider: m.provider || platform, endpoint, api_key: g.accounts[0].api_key,
+            primary_model: (m.primary_model || '').trim(), interval_seconds: Math.min(3600, Math.max(15, Number(m.interval_seconds || 60))),
+            enabled: true, api_mode: m.api_mode || 'chat_completions', extra_models: [], group_name: gname,
+          })
+          r.monitor_id = (mon && typeof mon === 'object') ? mon.id : mon
+        } catch (e) { r.monitor_error = `建渠道监控失败: ${msg(e)}` }
+      }
+    }
+
+    results.push(r)
   }
 
-  return { ok: created > 0, group_id: gid, group_name: gname, accounts, created, total: tiers.length, key, key_error: keyError, monitor_id: monitorId, monitor_error: monitorError }
+  const created = results.reduce((s, r) => s + (r.created || 0), 0)
+  const total = results.reduce((s, r) => s + (r.total || 0), 0)
+  return { ok: created > 0, groups: results, created, total }
 }

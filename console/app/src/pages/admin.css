@@ -1,0 +1,205 @@
+/* purpose: 平台管理页（登录 / 设置 / 站点 / 用户）专属视觉增强。仅 var(--token)，class 前缀 adm-。 */
+
+/* ============================================================
+   登录页 —— 第一印象，双主题出彩
+   ============================================================ */
+.adm-login-shell {
+  position: relative;
+  overflow: hidden;
+}
+/* 第二层柔光，叠在基础层 login-glow radial 之上，增加纵深；纯装饰 */
+.adm-login-shell::before {
+  content: '';
+  position: absolute;
+  inset: -25% -10% auto -10%;
+  height: 70%;
+  background:
+    radial-gradient(680px 320px at 18% 8%, var(--login-glow), transparent 70%),
+    radial-gradient(560px 300px at 86% 4%, var(--soft-violet), transparent 72%);
+  opacity: .9;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.adm-login-card {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  padding: 34px 30px 30px;
+  background: linear-gradient(180deg, var(--surface), var(--surface-2));
+  animation: adm-login-in var(--dur-slow) var(--ease-out) both;
+}
+@keyframes adm-login-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* brand-mark 居中 + 渐变质感 + 柔光晕（覆盖默认方块，纯视觉） */
+.adm-login-card .brand-mark {
+  margin: 0 auto 18px;
+  width: 54px;
+  height: 54px;
+  font-size: 22px;
+  background: linear-gradient(155deg, var(--primary), var(--primary-hover));
+  color: var(--on-accent);
+  box-shadow: var(--shadow-md), 0 0 0 5px var(--primary-ring);
+}
+
+.adm-login-card h1 { font-size: 23px; }
+.adm-login-card p { margin-bottom: 22px; }
+
+/* 登录输入：稍大点击区，焦点态由全局 ring 接管，这里只做节奏 */
+.adm-login-card input { text-align: center; letter-spacing: .02em; }
+
+/* 错误态：从纯文字升级为带底色的提示条，更易扫读 */
+.adm-login-err {
+  text-align: left;
+  border: 1px solid var(--soft-red-border);
+  background: var(--soft-red);
+  color: var(--danger-text);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 14px;
+  animation: adm-err-in var(--dur-base) var(--ease-out) both;
+}
+@keyframes adm-err-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* 首次配置（无密码）态：把 hint 文案做成 notice 风格的引导块 */
+.adm-setup-note {
+  text-align: left;
+  border: 1px dashed var(--border);
+  background: var(--attention-bg);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ============================================================
+   设置页 —— status-pill 真相源徽标 + 卡片层次
+   ============================================================ */
+/* 真相源 / L1 这两张"原则卡"加左侧强调条，区分于可操作卡 */
+.adm-principle-card {
+  position: relative;
+  overflow: hidden;
+  border-color: var(--soft-blue-border);
+}
+.adm-principle-card::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--primary);
+}
+.adm-principle-card strong {
+  color: var(--primary-text);
+}
+/* 第二张原则卡（L1 不可改源系统）用 danger 调，强调"禁止" */
+.adm-principle-card.adm-principle-danger { border-color: var(--soft-red-border); }
+.adm-principle-card.adm-principle-danger::before { background: var(--danger); }
+.adm-principle-card.adm-principle-danger strong { color: var(--danger-text); }
+
+/* 修改密码卡：标题做成分组标题感 */
+.adm-pw-card > span:first-child { letter-spacing: .01em; }
+
+/* ============================================================
+   站点页 —— 健康点 / kvs 状态色 / 卡片
+   ============================================================ */
+/* site-card 标题行：健康点 + 名称垂直居中对齐更稳 */
+.adm-site-card-h { display: flex; align-items: center; gap: 8px; line-height: 1.3; }
+
+/* kv 徽标做"状态色"变体：成功/缺失/警示。仅着色，结构不变 */
+.adm-kv-on  { border-color: var(--soft-green-border); background: var(--soft-green); color: var(--success-text); }
+.adm-kv-on b  { color: var(--success-text); }
+.adm-kv-off { border-color: var(--border); background: var(--surface-2); color: var(--muted); }
+.adm-kv-off b { color: var(--muted); }
+.adm-kv-health-ok   { border-color: var(--soft-green-border); background: var(--soft-green); color: var(--success-text); }
+.adm-kv-health-ok b { color: var(--success-text); }
+.adm-kv-health-bad  { border-color: var(--soft-red-border); background: var(--soft-red); color: var(--danger-text); }
+.adm-kv-health-bad b { color: var(--danger-text); }
+
+/* pubkey 复制区：code 块从内联 style 迁移到这里（仍只用 token），更整齐 */
+.adm-pubkey-row { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; }
+.adm-pubkey-box {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  word-break: break-all;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  color: var(--text-2);
+}
+.adm-pubkey-missing { margin-top: 10px; color: var(--danger-text); font-weight: 600; font-size: 13px; }
+
+/* ============================================================
+   用户页 —— 表格扫读性
+   ============================================================ */
+/* email 列：超长邮箱不撑破布局 */
+.adm-user-email { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 余额 / 并发数：mono 对齐数字，扫读更快 */
+.adm-num { font-variant-numeric: tabular-nums; color: var(--text-2); }
+
+/* role-channel 关闭提示：从普通 kv 升级为 amber 警示 */
+.adm-warn-kv {
+  border-color: var(--soft-amber);
+  background: var(--soft-amber);
+  color: var(--warning-text);
+  font-weight: 700;
+}
+
+/* ============================================================
+   响应式 —— 移动端不横向溢出
+   ============================================================ */
+@media (max-width: 640px) {
+  .adm-login-card { padding: 26px 20px 22px; }
+  .adm-user-email { max-width: 150px; }
+  .adm-pubkey-row { flex-direction: column; }
+}
+
+/* ============================================================
+   恶意账号清理面板 —— 筛选条件 + 命中预览
+   ============================================================ */
+.mc-panel { margin: 10px 0 4px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; border-color: var(--soft-amber); }
+.mc-head { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 800; color: var(--text); }
+.mc-desc { margin: 0; font-size: 12.5px; line-height: 1.6; }
+.mc-row { display: flex; align-items: center; gap: 10px; }
+.mc-row-wrap { flex-wrap: wrap; }
+.mc-label { font-size: 12.5px; font-weight: 700; color: var(--text-2); white-space: nowrap; }
+.mc-domains { flex: 1 1 320px; }
+.mc-substr { width: 160px; }
+.mc-inline { display: inline-flex; align-items: center; gap: 8px; }
+.mc-presets { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.mc-presets-lbl { font-size: 12px; color: var(--muted); margin-right: 2px; }
+.mc-pill-all { border-color: var(--soft-blue-border); color: var(--primary-text); font-weight: 700; }
+.mc-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--text-2); cursor: pointer; user-select: none; }
+.mc-check input { width: 15px; height: 15px; }
+.mc-matched { font-size: 12.5px; font-weight: 700; }
+
+/* 筛选生效条：醒目提示「仅显示匹配」 */
+.mc-active-bar { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.mc-active-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 700; color: var(--warning-text); border: 1px solid var(--soft-amber); background: var(--soft-amber); border-radius: var(--radius-sm); padding: 4px 10px; }
+.mc-ip-note { margin: 6px 0 0; font-size: 12px; }
+
+/* 按使用IP搜索框（工具栏内，带地球图标） */
+.users-ip-search { display: inline-flex; align-items: center; gap: 4px; flex: 1 1 180px; min-width: 150px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); padding: 0 8px; color: var(--muted); }
+.users-ip-search input { flex: 1; border: 0; background: transparent; padding: 7px 0; min-width: 0; }
+.users-ip-search input:focus { outline: none; }
+.users-ip-search:focus-within { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-ring); }
+.users-ip-kv { display: inline-flex; align-items: center; gap: 4px; }
+
+/* 用户表：勾选列收窄 + 命中行淡色高亮 + 注册时间列 mono */
+.users-table .col-check { width: 34px; text-align: center; }
+.users-table .adm-dt { font-size: 12px; white-space: nowrap; }
+.mc-hit-row td { background: color-mix(in srgb, var(--soft-amber) 30%, transparent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .adm-login-card, .adm-login-err { animation: none; }
+}

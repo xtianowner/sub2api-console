@@ -6,12 +6,21 @@
  * 凭据只在内存解密供调用，绝不外泄/打印。
  */
 import { execFile } from 'node:child_process'
+import { mkdirSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import pg from 'pg'
-import { db, nowCst } from './db.js'
-import { ADMIN_DATABASE_URL, DATABASE_URL, PROBE_MODEL, decryptCredential, encryptCredential } from './config.js'
+import { db, getSetting, nowCst, setSetting } from './db.js'
+import { ADMIN_DATABASE_URL, DATABASE_URL, PROBE_MODEL, SUB2_ADMIN_EMAIL, SUB2_ADMIN_PASSWORD, decryptCredential, encryptCredential } from './config.js'
 import { AdminApi } from './adminApi.js'
 
 const { Pool } = pg
+
+// SSH 连接复用(ControlMaster)：控制 socket 放可写临时目录（/root/.ssh 是只读挂载，放那会 bind 失败静默退化）。
+// 首个观测查询建主连接，后续查询复用同一通道，省去重复 TCP+KEX+鉴权——经 SOCKS 代理跨境时收益最大。
+// socket 随容器生命周期即可，无需持久化；建不出目录就退化为每次新建连接，功能不受影响。
+const SSH_MUX_DIR = path.join(os.tmpdir(), 'console-ssh-mux')
+try { mkdirSync(SSH_MUX_DIR, { recursive: true, mode: 0o700 }) } catch { /* best-effort */ }
 
 export interface SiteRow {
   id: number; name: string; base_url: string; gateway_url: string
@@ -36,6 +45,7 @@ export function sitePublic(s: SiteRow) {
     last_checked_at: s.last_checked_at, last_latency_ms: s.last_latency_ms, created_at: s.created_at,
     kind: s.kind || 'remote',
     has_admin_key: !!s.admin_key_enc, has_gateway_key: !!s.gateway_key_enc,
+    has_admin_login: hasSiteAdminLogin(s.id),
     pg_container: pgc, ssh_host: ssh,
     // 提权通道可用：本机有 pg 连接串 OR 远程配了 ssh_host+容器名
     role_channel: (s.kind === 'local' && !!ADMIN_DATABASE_URL) || (!!ssh && !!pgc),
@@ -57,6 +67,24 @@ export function getClient(siteId: number): AdminApi {
 export function invalidateSite(siteId?: number) {
   if (siteId === undefined) _clients.clear()
   else _clients.delete(siteId)
+}
+
+// ---- 站点级 sub2api 管理员登录（中转接入「使用用」key 表单留空时回退；建 key 需用户态 JWT）----
+// 真相仍在 sub2api（key 建在那边）；这里只存「以管理员身份登录」的凭据，加密落 settings。
+// 优先级：per-site(settings,加密) > env 全局默认(CONSOLE_SUB2_ADMIN_*) > 空。email 始终有缺省。
+export function getSiteAdminLogin(siteId: number): { email: string; password: string } {
+  const e = getSetting(`site_admin_email:${siteId}`)
+  const p = getSetting(`site_admin_pwd:${siteId}`)
+  const email = (e ? decryptCredential(e) : '') || SUB2_ADMIN_EMAIL
+  const password = (p ? decryptCredential(p) : '') || SUB2_ADMIN_PASSWORD
+  return { email, password }
+}
+export function hasSiteAdminLogin(siteId: number): boolean {
+  return !!getSetting(`site_admin_pwd:${siteId}`) || !!SUB2_ADMIN_PASSWORD
+}
+export function setSiteAdminLogin(siteId: number, email?: string, password?: string): void {
+  if (email && email.trim()) setSetting(`site_admin_email:${siteId}`, encryptCredential(email.trim()))
+  if (password) setSetting(`site_admin_pwd:${siteId}`, encryptCredential(password))
 }
 export function siteProbeModel(siteId: number): string {
   return getSite(siteId)?.probe_model || PROBE_MODEL
@@ -90,7 +118,13 @@ export function sshPsql(sshHost: string, pgContainer: string, sql: string): Prom
   if (m) { host = m[1]; port = m[2] }
   const inner = 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tA'
   const remoteCmd = `docker exec -i ${pgContainer} sh -c '${inner}'`
-  const args = ['-o', 'StrictHostKeyChecking=accept-new', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
+  const args = [
+    '-o', 'StrictHostKeyChecking=accept-new', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+    // 连接复用：%C 按连接参数哈希命名，多站点不串；ControlPersist 让主连接空闲保活 5 分钟供后续查询复用。
+    '-o', 'ControlMaster=auto', '-o', `ControlPath=${SSH_MUX_DIR}/%C`, '-o', 'ControlPersist=300',
+    // 探活：主连接半死时及时发现并重建，避免 slave 卡到 execFile 的 40s 超时。
+    '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3',
+  ]
   if (port) args.push('-p', port)
   args.push(host, remoteCmd)
   return execFileP('ssh', args, sql)
@@ -116,6 +150,7 @@ export function addSite(body: any): any {
     ).run(name, base, gw, encryptCredential(adminKey), encryptCredential(body.gateway_key || ''),
       body.probe_model || PROBE_MODEL, (body.pg_container || '').trim(), (body.ssh_host || '').trim(), kind, nowCst())
     const sid = Number(info.lastInsertRowid)
+    if (body.admin_login_email || body.admin_login_password) setSiteAdminLogin(sid, body.admin_login_email, body.admin_login_password)
     invalidateSite(sid)
     return { site_id: sid, name }
   } catch (e) {
@@ -138,6 +173,7 @@ export function updateSite(sid: number, body: any): any {
   if (body.admin_key) { sets.push('admin_key_enc=?'); vals.push(encryptCredential(body.admin_key)) }
   if (body.gateway_key) { sets.push('gateway_key_enc=?'); vals.push(encryptCredential(body.gateway_key)) }
   if (sets.length) { vals.push(sid); db().prepare(`UPDATE sites SET ${sets.join(',')} WHERE id=?`).run(...vals) }
+  if (body.admin_login_email || body.admin_login_password) setSiteAdminLogin(sid, body.admin_login_email, body.admin_login_password)
   invalidateSite(sid)
   return { site_id: sid, updated: true }
 }

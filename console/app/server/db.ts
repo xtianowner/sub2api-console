@@ -74,6 +74,16 @@ CREATE TABLE IF NOT EXISTS recycle (
   access_token TEXT, refresh_token TEXT, id_token TEXT,
   verdict TEXT, deleted_at TEXT, reason TEXT
 );
+-- 派生缓存：用户最近使用 IP（源 = sub2api usage_logs.ip_address，增量同步建表；非第二权威，只为秒开 + 按 IP 反查）。
+CREATE TABLE IF NOT EXISTS user_ip (
+  site_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  last_ip TEXT,
+  last_at TEXT,
+  all_ips TEXT,            -- JSON 数组：该用户出现过的 IP 集（封顶 50）
+  updated_at TEXT,
+  PRIMARY KEY (site_id, user_id)
+);
 CREATE INDEX IF NOT EXISTS idx_batches_site ON batches(site_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_invsnap_site ON inventory_snapshots(site_id, batch_id);
 CREATE INDEX IF NOT EXISTS idx_probe_site ON probe_results(site_id, sub2_account_id);

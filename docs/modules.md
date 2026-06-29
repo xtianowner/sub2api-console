@@ -18,6 +18,7 @@
 | `cleanup.ts` | 失效号异步清理(进度+急停+回收快照) | site/ids | 状态 | adminApi、sourceTokens、db | `web_server._run_cleanup` |
 | `users.ts` | 用户列表 + 改 role 提权(本机 pg/远程 ssh) + 启禁(admin API) | site/body | rows/结果 | sites、adminApi | `web_server` 用户段+`_pg_set_role` |
 | `observability.ts` | **站点感知** summary/requests/attention：本机→pg 池(参数化)、远程→ssh docker exec psql(SQL 返单个 JSON，window 白名单 + q/model 字面量转义防注入) | site/window/q | 指标/行 | pg(localPool)、sshPsql | 原 Observer `server/index.ts` |
+| `usageReport.ts` | **按邮箱+时间段**拉单用户消费/缓存报告(身份解析 found/notFound/ambiguous + metrics 四项成本拆分对账 + 逐日/逐模型/逐key/最贵请求)；上海时区切日；本机参数化 / 远程聚合成单 JSON(email lit 转义、日期 ^\d{4}-\d{2}-\d{2}$ 白名单)。复用 obsMode 守卫 | site/q/uid/range/start/end | UsageReportResponse | sites、observability(obsMode) | 新增(本轮) |
 | `auth.ts` | 密码门:登录发签名会话cookie+中间件保护写/读 | password/req | 会话 | config | pool-manager X-Admin-Pass 升级 |
 | `index.ts` | Express 总装:公共 login/session/health + 门禁后全端点 + SPA | - | - | 全部 | - |
 

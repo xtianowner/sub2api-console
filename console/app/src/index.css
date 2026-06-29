@@ -1,3 +1,7 @@
+html {
+  /* 双主题：浏览器原生控件（滚动条/表单）跟随当前主题 */
+  color-scheme: light dark;
+}
 html, body, #root {
   margin: 0;
   min-width: 320px;
@@ -5,7 +9,9 @@ html, body, #root {
 }
 
 body {
-  background: #f8fafc;
+  /* 背景走 token（App.css :root 定义 --bg，data-theme="dark" 覆盖）；
+     设兜底色防 token 注入前的首帧白闪。 */
+  background: var(--bg, #f1f5f9);
 }
 
 button, input, select, textarea {

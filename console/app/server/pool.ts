@@ -3,7 +3,7 @@
  * §10：分组与成员一律实时取自 sub2api(list_groups/list_accounts)，本地只叠加 probe 判活(派生)与批次名(元数据)。
  */
 import { db, nowCst } from './db.js'
-import { getClient } from './sites.js'
+import { getClient, getSiteAdminLogin } from './sites.js'
 import { fetchTokens } from './sourceTokens.js'
 import type { AdminAccount } from './adminApi.js'
 
@@ -36,6 +36,17 @@ function latestProbes(siteId: number): Map<number, ProbeRow> {
   return m
 }
 
+/** 限流并行：把原本串行的 N 次 admin-REST 回源压到 ceil(N/limit) 波，墙钟大降而不改语义/顺序。 */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, idx: number) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length)
+  let i = 0
+  const lanes = Math.max(1, Math.min(limit, items.length || 1))
+  await Promise.all(Array.from({ length: lanes }, async () => {
+    while (i < items.length) { const idx = i++; out[idx] = await fn(items[idx], idx) }
+  }))
+  return out
+}
+
 export function mergeAccounts(siteId: number, accts: AdminAccount[]): any[] {
   const probes = latestProbes(siteId)
   return accts.map((a) => {
@@ -44,8 +55,8 @@ export function mergeAccounts(siteId: number, accts: AdminAccount[]): any[] {
     const pr = probes.get(a.id)
     let v = pr?.verdict ?? null
     if (v === 'active') v = null // 旧 fallback 误把 sub2 status 当 verdict → 视为未盘点
-    const up = pr?.codex_7d_pct
-    const u5 = pr?.codex_5h_pct
+    const u5 = pr?.codex_5h_pct   // 5h 窗口
+    const u7 = pr?.codex_7d_pct   // 7d(周) 窗口
     return {
       id: a.id, name: a.name,
       email: cred.email || a.name,
@@ -53,8 +64,8 @@ export function mergeAccounts(siteId: number, accts: AdminAccount[]): any[] {
       has_token: a.type === 'oauth',
       status: a.status, schedulable: a.schedulable, verdict: v,
       priority: a.priority, concurrency: a.concurrency,
-      used_primary: up != null ? up : ex.codex_7d_used_percent,
       used_5h: u5 != null ? u5 : ex.codex_5h_used_percent,
+      used_7d: u7 != null ? u7 : ex.codex_7d_used_percent,
       usage_updated: pr?.probed_at || ex.codex_usage_updated_at,
       last_probe_at: pr?.probed_at || null,
       expires_at: a.expires_at || cred.expires_at,
@@ -64,6 +75,100 @@ export function mergeAccounts(siteId: number, accts: AdminAccount[]): any[] {
       rate_limit_reset_at: a.rate_limit_reset_at,
     }
   })
+}
+
+/**
+ * 分组管理（从分组视角增删成员）。MemberAccount 形如
+ * { id, name, email, type, status, verdict, group_ids[] }——group_ids 直接取自账号体 a.group_ids（sub2api 列表已填充）。
+ */
+export async function accountsWithGroups(siteId: number): Promise<{ groups: any[]; accounts: any[] }> {
+  const client = getClient(siteId)
+  let groups: any[] = []
+  try { const gl = await client.listGroups(1, 300); groups = Array.isArray(gl) ? gl : (gl?.items || []) } catch { groups = [] }
+  const raw = await client.listAllAccounts({})
+  const gidByA = new Map<number, number[]>(raw.map((a) => [a.id, (a.group_ids as number[]) || []]))
+  // 复用 mergeAccounts 拿完整账号字段（priority/并发/用量/判活/代理等），再附 group_ids，
+  // 让分组管理页与账号管理同等可编辑（不止看成员，还能改优先级/并发/代理/盘点/清理/删除）。
+  const accounts = mergeAccounts(siteId, raw).map((r) => ({ ...r, group_ids: gidByA.get(r.id) || [] }))
+  return { groups, accounts }
+}
+
+/**
+ * 分组密钥管理（从分组视角 列/建/删「使用用」API Key）。
+ * sub2api 的 key 一律用户态管理（admin-api-key 不可），故用站点存的 sub2api 管理员登录换 JWT 操作；
+ * 列出的是「该管理员账号名下、绑定本组」的 key（上游无跨用户 admin 列 key 端点）。
+ * key 与分组 1:1/1:0（group_id 单值）；明文仅创建时返回一次，不落库。
+ */
+export async function groupKeys(siteId: number, groupId: number): Promise<{ keys: any[]; total: number; admin_login: boolean }> {
+  const { email, password } = getSiteAdminLogin(siteId)
+  if (!email || !password) return { keys: [], total: 0, admin_login: false }
+  const { items, total } = await getClient(siteId).listGroupKeys(email, password, groupId)
+  return { keys: items, total, admin_login: true }
+}
+
+export async function createGroupKey(siteId: number, groupId: number, name?: string): Promise<{ id: number; key: string }> {
+  if (!groupId) throw new Error('未选择分组')
+  const { email, password } = getSiteAdminLogin(siteId)
+  if (!email || !password) throw new Error('未配置该站点的 sub2api 管理员登录凭据，无法创建密钥（在「站点」设置里填写管理员邮箱+密码）')
+  const nm = (name || '').trim() || `group-${groupId}-key`
+  return getClient(siteId).createUsageKey(email, password, { name: nm, group_id: groupId })
+}
+
+export async function deleteGroupKey(siteId: number, keyId: number): Promise<{ deleted: boolean }> {
+  if (!keyId) throw new Error('缺少 key id')
+  const { email, password } = getSiteAdminLogin(siteId)
+  if (!email || !password) throw new Error('未配置该站点的 sub2api 管理员登录凭据，无法删除密钥')
+  await getClient(siteId).deleteUsageKey(email, password, keyId)
+  return { deleted: true }
+}
+
+/** 持久化分组顺序：按传入的有序 id 列表，写每个分组的 sort_order（下标即顺序，越小越靠前）。 */
+export async function setGroupOrder(siteId: number, orderedIds: number[]): Promise<any> {
+  const updates = orderedIds.map((id, i) => ({ id: Number(id), sort_order: i }))
+  if (!updates.length) return { ok: true, updated: 0 }
+  await getClient(siteId).updateGroupSortOrder(updates)
+  return { ok: true, updated: updates.length }
+}
+
+/**
+ * 把若干账号「加入」目标分组。增量语义：sub2api 写 group_ids 是 REPLACE（删全部+重建），
+ * 故必须读各号现有分组集合 → 并入 {groupId} → 整套回写，避免误清该号在其它分组的归属。
+ */
+export async function addAccountsToGroup(siteId: number, groupId: number, accountIds: number[]): Promise<{ added: number; failed: number; errors: string[] }> {
+  const client = getClient(siteId)
+  // 一次性快照全量分组归属，避免逐号 GET（注意：并发外部改动会令快照变陈旧，本批以快照为准）。
+  const raw = await client.listAllAccounts({})
+  const cur = new Map<number, number[]>()
+  for (const a of raw) cur.set(a.id, (a.group_ids as number[]) || [])
+  let added = 0, failed = 0; const errors: string[] = []
+  await mapLimit(accountIds, 6, async (id) => {
+    const set = cur.get(id) || []
+    if (set.includes(groupId)) return // 已是成员 → 跳过
+    const newSet = Array.from(new Set([...set, groupId]))
+    try { await client.updateAccount(id, { group_ids: newSet }); added++ }
+    catch (e) { failed++; errors.push(`#${id}: ${String(e instanceof Error ? e.message : e).slice(0, 60)}`) }
+  })
+  return { added, failed, errors: errors.slice(0, 20) }
+}
+
+/**
+ * 把若干账号「移出」目标分组。同样增量：读现有集合 → 减去 {groupId} → 整套回写（REPLACE 安全）。
+ * 移出最后一个分组（→ []）允许。
+ */
+export async function removeAccountsFromGroup(siteId: number, groupId: number, accountIds: number[]): Promise<{ removed: number; failed: number; errors: string[] }> {
+  const client = getClient(siteId)
+  const raw = await client.listAllAccounts({})
+  const cur = new Map<number, number[]>()
+  for (const a of raw) cur.set(a.id, (a.group_ids as number[]) || [])
+  let removed = 0, failed = 0; const errors: string[] = []
+  await mapLimit(accountIds, 6, async (id) => {
+    const set = cur.get(id) || []
+    const newSet = set.filter((g) => g !== groupId)
+    if (newSet.length === set.length) return // 本就不在该组 → 跳过
+    try { await client.updateAccount(id, { group_ids: newSet }); removed++ }
+    catch (e) { failed++; errors.push(`#${id}: ${String(e instanceof Error ? e.message : e).slice(0, 60)}`) }
+  })
+  return { removed, failed, errors: errors.slice(0, 20) }
 }
 
 export async function groupAccounts(siteId: number, group: number): Promise<any[]> {
@@ -93,19 +198,20 @@ export async function poolOverview(siteId: number): Promise<any> {
     if (b.sub2_group_id != null && !bmeta.has(b.sub2_group_id)) bmeta.set(b.sub2_group_id, { batch_id: b.id, name: b.name })
   }
   const vmap = latestProbes(siteId)
-  const bygrp: any[] = []
-  for (const g of groups) {
-    if (!g || typeof g !== 'object') continue
+  // 每个分组要列成员算 alive/dead（账号体不带 group 字段，无法从已拉全量里就地分组），
+  // 故仍按组回源，但从串行 await 改为限流并行（cap 6），墙钟从 N×RTT 降到 ⌈N/6⌉×RTT。
+  const validGroups = groups.filter((g) => g && typeof g === 'object')
+  const bygrp = (await mapLimit(validGroups, 6, async (g) => {
     const gid = g.id; const gname = g.name
     let members: AdminAccount[] = []
     try { members = (await client.listAccounts({ group: gid, pageSize: 1000 }))?.items || [] } catch { members = [] }
     const mids = members.map((m) => m.id)
-    if (!mids.length && !bmeta.has(gid)) continue
+    if (!mids.length && !bmeta.has(gid)) return null
     const meta = bmeta.get(gid)
     const alive = mids.filter((id) => vmap.get(id)?.verdict === 'alive').length
     const dead = mids.filter((id) => { const v = vmap.get(id)?.verdict; return v === 'dead' || v === 'auth_fail' }).length
-    bygrp.push({ batch_id: meta?.batch_id, name: meta?.name || gname, group: gid, total: mids.length, alive, dead })
-  }
+    return { batch_id: meta?.batch_id, name: meta?.name || gname, group: gid, total: mids.length, alive, dead }
+  })).filter(Boolean)
   return { total: rows.length, by_verdict: vc, by_status: sc, expiring_7d: expiring, rate_limited: vc.rate_limited || 0, by_group: bygrp }
 }
 
@@ -118,14 +224,20 @@ export async function batches(siteId: number): Promise<any[]> {
     liveGroups = new Set(glist.map((g: any) => g.id))
   } catch { liveGroups = null }
   const client = getClient(siteId)
-  for (const b of rows) {
+  // 并行回源各批次账号数；只取 total（pageSize:1），不再把整页 1000 行拉回来仅为 .length。
+  await mapLimit(rows, 6, async (b) => {
     if (b.sub2_group_id != null) {
-      try { b.account_count = ((await client.listAccounts({ group: b.sub2_group_id, pageSize: 1000 }))?.items || []).length } catch { b.account_count = null }
+      try {
+        const d = await client.listAccounts({ group: b.sub2_group_id, pageSize: 1 })
+        const total = Array.isArray(d) ? d.length : d?.total
+        // total 缺失时退回全量统计兜底（极少见，保证数字准确）。
+        b.account_count = total != null ? total : ((await client.listAccounts({ group: b.sub2_group_id, pageSize: 1000 }))?.items || []).length
+      } catch { b.account_count = null }
     } else b.account_count = 0
     b.orphaned = !!(liveGroups != null && !liveGroups.has(b.sub2_group_id))
     const snap = db().prepare('SELECT * FROM inventory_snapshots WHERE batch_id=? AND site_id=? ORDER BY id DESC LIMIT 1').get(b.id, siteId)
     b.last_snapshot = snap || null
-  }
+  })
   return liveGroups != null ? rows.filter((b) => !b.orphaned) : rows
 }
 
